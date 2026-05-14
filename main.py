@@ -143,7 +143,7 @@ async def on_note(note):
                 last_user_message = conversation_messages[-1]["content"]
                 
                 response = client.models.generate_content(
-                    model="gemma-4-31b-it",
+                    model="gemma-4-26b-a4b-it",
                     config=types.GenerateContentConfig(
                         system_instruction=system_message
                     ),
