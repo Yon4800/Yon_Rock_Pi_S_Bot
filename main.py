@@ -53,6 +53,18 @@ seikaku = """
     メンション(@)はしない
     """
 
+oha = "07:00"
+
+ohiru = "12:00"
+
+oyatsu = "15:00"
+
+yuuhann = "19:00"
+
+oyasumi = "22:00"
+
+oyasumi2 = "02:00"
+
 def jobX(current_time):
     system_message = seikaku + "\n現在時刻は" + current_time + "です。\n定期挨拶です。"
     response = client.models.generate_content(
