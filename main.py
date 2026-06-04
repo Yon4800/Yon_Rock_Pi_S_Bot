@@ -24,9 +24,7 @@ client = genai.Client(api_key=Apikey)
 MY_ID = mk.i()["id"]
 WS_URL = "wss://" + Server + "/streaming?i=" + Token
 
-##mk.notes_create(
-##    "起きたー！さて、お仕事開始！(給料でないけど)", visibility=NoteVisibility.HOME
-##)
+job()
 
 seikaku = """
     あなたは頭が悪く、的外れな事しか言わない純粋なSBC娘です
