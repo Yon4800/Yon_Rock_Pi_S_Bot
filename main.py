@@ -70,8 +70,6 @@ def jobX(current_time):
     response = client.models.generate_content(
         model="gemma-4-26b-a4b-it",
         config=types.GenerateContentConfig(
-            max_output_tokens=1000,
-            temperature=0.0,
             system_instruction=system_message,
         ),
         contents=types.Content(
@@ -200,8 +198,6 @@ async def on_note(note):
                 response = client.models.generate_content(
                     model="gemma-4-26b-a4b-it",
                     config=types.GenerateContentConfig(
-                        max_output_tokens=1000,
-                        temperature=0.0,
                         system_instruction=system_message
                     ),
                     contents=history
