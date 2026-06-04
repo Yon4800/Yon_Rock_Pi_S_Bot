@@ -62,7 +62,7 @@ oyasumi = "22:00"
 oyasumi2 = "02:00"
 
 def jobX(current_time):
-    system_message = seikaku + "\n現在時刻は" + current_time + "です。\n定期挨拶です。"
+    system_message = seikaku + "\n現在時刻は" + current_time + "です。"
     response = client.models.generate_content(
         model="gemini-3.1-flash-lite",
         config=types.GenerateContentConfig(
