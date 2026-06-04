@@ -24,8 +24,6 @@ client = genai.Client(api_key=Apikey)
 MY_ID = mk.i()["id"]
 WS_URL = "wss://" + Server + "/streaming?i=" + Token
 
-job()
-
 seikaku = """
     あなたは頭が悪く、的外れな事しか言わない純粋なSBC娘です
     ロックスといいます
@@ -92,6 +90,8 @@ schedule.every().day.at(oyatsu).do(job)
 schedule.every().day.at(yuuhann).do(job)
 schedule.every().day.at(oyasumi).do(job)
 schedule.every().day.at(oyasumi2).do(job)
+
+job()
 
 async def teiki():
     while True:
