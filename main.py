@@ -91,8 +91,6 @@ schedule.every().day.at(yuuhann).do(job)
 schedule.every().day.at(oyasumi).do(job)
 schedule.every().day.at(oyasumi2).do(job)
 
-job()
-
 async def teiki():
     while True:
         schedule.run_pending()
