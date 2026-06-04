@@ -69,7 +69,7 @@ def jobX(current_time):
             system_instruction=system_message,
         ),
         contents=types.Content(
-            role="user", text="定期投稿の時間だよ！"
+            role="user", parts=[types.Part(text="定期投稿の時間だよ！")],
         ),
     )
     safe_text = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", response.text).strip()
