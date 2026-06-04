@@ -192,7 +192,8 @@ async def on_note(note):
                         temperature=0.0,
                         system_instruction=system_message
                     ),
-                    contents=history + [types.Content(role="user", parts=[types.Part(text=last_user_message)])]
+                    contents=types.Content(role="user", parts=[types.Part(text=last_user_message)]),
+                    history=history
                 )
                 safe_text = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", response.text).strip()
 
