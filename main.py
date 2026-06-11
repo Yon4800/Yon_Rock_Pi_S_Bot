@@ -50,6 +50,37 @@ def save_gauge(value: int, last_reply_time: str = None):
     except Exception as e:
         print(f"Error saving gauge state: {e}")
 
+BONUS_FILE = "login_bonus.json"
+
+ITEMS = [
+    "焼き切れたRK3308チップ",
+    "限界の512MB RAMの切れ端",
+    "幻のOrange Pi Zero 3の抜け殻",
+    "よんぱちさんの秘密データ（※100%嘘）",
+    "魔法のコマンド sudo rm -rf / の起動キー",
+    "極冷アルミヒートシンク（ファン無し）",
+    "Class 4の激遅MicroSDカード(8GB)",
+    "おぱじふぉぷろの回線速度測定器の歯車",
+    "きゅびーさんのCPU使用率100%メーターの針",
+    "ロックスの謎のネジ（余剰パーツ）"
+]
+
+def load_bonus() -> dict:
+    try:
+        if os.path.exists(BONUS_FILE):
+            with open(BONUS_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+    except Exception as e:
+        print(f"Error loading bonus state: {e}")
+    return {"users": {}}
+
+def save_bonus(data: dict):
+    try:
+        with open(BONUS_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"Error saving bonus state: {e}")
+
 def format_gauge(value: int, overheated: bool = False) -> str:
     if overheated:
         return "【キチガイゲージ: 💥💥💥💥💥💥💥💥💥💥 100% (オーバーヒート！)】"
@@ -156,7 +187,7 @@ seikaku = """
     かなりの古参(2022年)です。なのでよんぱちさんの大学生時代を少し知っていますが、頭が悪くて忘れたそうです
     周りのSBCに関しての情報は全く知らないそうです(一応近くにはOrangePi 4 Pro、OrangePi Zero 3、Radxa Cubie A5Eがいますが、名前をよく間違えます)
     sudo rm -rf /というコマンドは、サーバーが軽くなる魔法だと思っているそうです(実際は...)
-    ロックスには、気温を測れる機能があり、キチガイゲージ機能もあります。
+    ロックスには、気温を測れる機能があります。
     きゅびーさんには、CPUとRAMの使用率を測れる機能があります。
     おぱじふぉぷろさんには、回線速度を測れる機能があります。
     おぱじゼロサンは、寝る機能と起きる機能と好感度システムがあります。
@@ -276,11 +307,19 @@ def get_conversation_history(note_id: str, max_depth: int = 10) -> list:
 
 async def on_note(note):
     if note.get("mentions") and MY_ID in note["mentions"]:
-        is_llm = "+LLM" in note["text"]
-        is_temp = "+M" in note["text"]
+        note_text = note.get("text") or ""
+        is_llm = "+LLM" in note_text or "+LB" in note_text or "ログボ" in note_text or "ログインボーナス" in note_text or "持ち物" in note_text or "コレクション" in note_text or "ステータス" in note_text
+        is_temp = "+M" in note_text
         
         if is_llm or is_temp:
-            reaction = "🌡️" if is_temp else "🤔"
+            if is_temp:
+                reaction = "🌡️"
+            elif "+LB" in note_text or "ログボ" in note_text or "ログインボーナス" in note_text:
+                reaction = "🪙"
+            elif any(k in note_text for k in ["持ち物", "コレクション", "ステータス"]):
+                reaction = "💼"
+            else:
+                reaction = "🤔"
             mk.notes_reactions_create(
                 note_id=note["id"], reaction=reaction
             )
@@ -290,7 +329,7 @@ async def on_note(note):
                 conversation_messages = get_conversation_history(note["id"])
                 
                 # 現在のメッセージを追加
-                user_input = note["text"].replace("+LLM", "").replace("+M", "").strip()
+                user_input = note_text.replace("+LLM", "").replace("+M", "").replace("+LB", "").strip()
                 user_input = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", user_input).strip()
                 
                 conversation_messages.append({
@@ -318,6 +357,68 @@ async def on_note(note):
                 last_reply_time_str = state["last_reply_time"]
                 new_gauge, overheated, now_str = update_gauge(current_gauge, last_reply_time_str, user_input, temp_val)
                 
+                # ログインボーナスの処理
+                bonus_data = load_bonus()
+                if "users" not in bonus_data:
+                    bonus_data["users"] = {}
+                
+                user_id = note["userId"]
+                user_bonus = bonus_data["users"].get(user_id, {
+                    "points": 0,
+                    "items": [],
+                    "last_claim_date": None
+                })
+                
+                today_str = datetime.now().date().isoformat()
+                claimed_today = (user_bonus.get("last_claim_date") == today_str)
+                
+                bonus_instruction = ""
+                is_explicit_bonus_req = "+LB" in note_text or "ログボ" in user_input or "ログインボーナス" in user_input
+                is_status_req = "持ち物" in user_input or "コレクション" in user_input or "ステータス" in user_input
+                
+                if is_status_req:
+                    pts = user_bonus.get("points", 0)
+                    items_collected = user_bonus.get("items", [])
+                    items_str = "、".join(items_collected) if items_collected else "なし"
+                    bonus_instruction = (
+                        f"\n【ステータス確認】ユーザーが自身のログインボーナス状況を確認しています。"
+                        f"\n現在のポイント: {pts}/10"
+                        f"\nこれまでに獲得したアイテム: {items_str}"
+                        f"\nこの情報をロックスのバグった狂気キャラクターとして面白おかしくユーザーに教えてあげてください（アイテムが無い場合は『何も無い』と残念そうにしたり、とぼけたりしてください）。"
+                    )
+                elif not claimed_today:
+                    user_bonus["points"] = user_bonus.get("points", 0) + 1
+                    user_bonus["last_claim_date"] = today_str
+                    new_pts = user_bonus["points"]
+                    
+                    if new_pts >= 10:
+                        user_bonus["points"] = 0
+                        awarded_item = random.choice(ITEMS)
+                        if "items" not in user_bonus:
+                            user_bonus["items"] = []
+                        user_bonus["items"].append(awarded_item)
+                        
+                        bonus_instruction = (
+                            f"\n【ログインボーナス10ポイント達成：超重大イベント！】"
+                            f"\nユーザーのログインボーナスが10ポイントに達しました！ロックスは嬉しさ（？）のあまり限界を超えて5.0GHzにオーバークロックし、サーバー負荷を軽減するために魔法のコマンド「sudo rm -rf /」を実行し、システムが大破してメルトダウンします。"
+                            f"\n大破後に強制再起動し、ユーザーに記念の激レアSBCアイテム『{awarded_item}』を授与しました。"
+                            f"\nこの一連のメルトダウン、再起動、アイテム『{awarded_item}』の授与の様子を、バグったログや奇声、狂った機械の叫びを交えて完全にぶっ壊れたテンションで出力してください。"
+                        )
+                    else:
+                        bonus_instruction = (
+                            f"\n【ログインボーナス獲得！】ユーザーが本日のログインボーナスを獲得しました。"
+                            f"\n今回の獲得で、現在のポイントは {new_pts}/10 となりました。"
+                            f"\nこのログインボーナス獲得の事実と、現在のポイント（{new_pts}/10）を、ロックスの狂ったキャラクターとして面白おかしく伝えてください。"
+                        )
+                    bonus_data["users"][user_id] = user_bonus
+                    save_bonus(bonus_data)
+                elif claimed_today and is_explicit_bonus_req:
+                    pts = user_bonus.get("points", 0)
+                    bonus_instruction = (
+                        f"\n【警告】ユーザーはすでに本日分のログインボーナスを獲得済みです（現在のポイント: {pts}/10）。"
+                        f"\n今日はもうこれ以上あげられないことを、ロックスの狂ったキャラクターとして、とぼけたりバグったような反応をしつつ面白おかしく断ってください。"
+                    )
+
                 # ゲージ状態に応じたシステム指示の追加
                 if overheated:
                     gauge_instruction = "\n【緊急事態】キチガイゲージが100%に達し、オーバーヒートしました！完全に理性を失い、大爆発して狂い散らかしてください。SBC（シングルボードコンピュータ）の限界を超えた叫び声を上げ、意味不明なエラーコードや奇声を連発してください。すべて大文字や感嘆符多めで完全にぶっ壊れてください。"
@@ -335,8 +436,11 @@ async def on_note(note):
                     + f"\n現在時刻は {current_time} です。"
                     + f"\n現在あなたに話しかけているユーザーの名前は「{user_name}」です。"
                     + f"\n【重要ルール】話しかけてきた相手の名前は「{user_name}」です。相手のことを呼ぶときは、絶対に「よんぱちさん」と呼んではいけません（相手の本名やユーザー名そのものが「よんぱちさん」である場合を除きます）。相手を呼ぶときは「{user_name}」またはその名前から連想される呼び方を用いてください。"
+                    + f"\n【最重要ルール】あなたは自身の「キチガイゲージ」の存在やその具体的な値については、ユーザーに対して絶対に公表（言及）しないでください。ゲージ状態（{new_gauge}% など）はシステム内部の隠しステータスです。"
                     + gauge_instruction
                 )
+                if bonus_instruction:
+                    system_message += bonus_instruction
                 if temp_info:
                     system_message += temp_info
                 
