@@ -25,6 +25,77 @@ client = genai.Client(api_key=Apikey)
 MY_ID = mk.i()["id"]
 WS_URL = "wss://" + Server + "/streaming?i=" + Token
 
+STATE_FILE = "gauge_state.json"
+
+def load_gauge() -> int:
+    try:
+        if os.path.exists(STATE_FILE):
+            with open(STATE_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return data.get("crazy_gauge", 50)
+    except Exception as e:
+        print(f"Error loading gauge: {e}")
+    return 50
+
+def save_gauge(value: int):
+    try:
+        with open(STATE_FILE, "w", encoding="utf-8") as f:
+            json.dump({"crazy_gauge": value}, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"Error saving gauge: {e}")
+
+def format_gauge(value: int, overheated: bool = False) -> str:
+    if overheated:
+        return "【キチガイゲージ: 💥💥💥💥💥💥💥💥💥💥 100% (オーバーヒート！)】"
+    filled = value // 10
+    empty = 10 - filled
+    if value < 30:
+        emoji = "🟢"
+    elif value < 70:
+        emoji = "🟡"
+    else:
+        emoji = "🔴"
+    bar = emoji * filled + "⬜" * empty
+    return f"【キチガイゲージ: {bar} {value}%】"
+
+def update_gauge(current_value: int, text: str, temp: float = None) -> tuple[int, bool]:
+    # 1. Base random shift (range: -5 to +10)
+    change = random.randint(-5, 10)
+    
+    # 2. Keyword triggers
+    text_lower = text.lower()
+    chaos_keywords = ["キチガイ", "きちがい", "狂", "バカ", "あほ", "アホ", "馬鹿", "壊れる", "こわれる", "熱い", "あつい", "爆発", "火事", "熱", "温度", "rm -rf", "sudo", "バルス", "死ね", "壊す", "ファック", "fuck"]
+    calm_keywords = ["ありがとう", "落ち着いて", "おちついて", "冷やして", "冷静", "安全", "おつかれ", "よしよし", "いいこ", "平和", "ひやす", "冷ます"]
+    
+    for kw in chaos_keywords:
+        if kw in text_lower:
+            change += 15
+            break
+            
+    for kw in calm_keywords:
+        if kw in text_lower:
+            change -= 15
+            break
+            
+    # 3. Temperature triggers
+    if temp is not None:
+        if temp > 28.0:
+            change += int((temp - 28.0) * 3) + 5
+        elif temp < 18.0:
+            change -= int((18.0 - temp) * 2) + 5
+            
+    new_value = current_value + change
+    
+    # Check for overheat explosion scenario
+    overheated = False
+    if new_value >= 100:
+        new_value = 100
+        overheated = True
+    elif new_value < 0:
+        new_value = 0
+        
+    return new_value, overheated
+
 seikaku = """
     あなたは頭が悪く、的外れな事しか言わないSBC両生類です
     ロックスといいます
@@ -192,16 +263,39 @@ async def on_note(note):
                 
                 # DHT11の値を非同期スレッドで取得 (WebSocketのブロッキング防止)
                 temp_info = ""
+                temp_val = None
                 if is_temp:
                     loop = asyncio.get_running_loop()
                     temp, hum = await loop.run_in_executor(None, read_dht)
                     if temp is not None:
+                        temp_val = temp
                         temp_info = f"\n[センサー情報]\n現在の室温は {temp:.1f}℃ です。湿度(参考)は {hum:.1f}% です。\n※注意: キャラクター設定（嘘をつくなど）に関わらず、現在の室温の値（{temp:.1f}℃）だけは正確にそのまま伝えてください。"
                     else:
                         temp_info = "\n[センサー情報]\nセンサーからの室温取得に失敗しました。\n※注意: キャラクター設定（嘘をつくなど）に関わらず、現在は『室温の測定に失敗した（測れなかった）』ということだけは絶対に正確にそのまま伝えてください（架空の室温の数値をでっち上げたりしないでください）。"
                 
+                # キチガイゲージの更新
+                current_gauge = load_gauge()
+                new_gauge, overheated = update_gauge(current_gauge, user_input, temp_val)
+                
+                # ゲージ状態に応じたシステム指示の追加
+                if overheated:
+                    gauge_instruction = "\n【緊急事態】キチガイゲージが100%に達し、オーバーヒートしました！完全に理性を失い、大爆発して狂い散らかしてください。SBC（シングルボードコンピュータ）の限界を超えた叫び声を上げ、意味不明なエラーコードや奇声を連発してください。すべて大文字や感嘆符多めで完全にぶっ壊れてください。"
+                elif new_gauge >= 70:
+                    gauge_instruction = "\n【状態】キチガイゲージが非常に高くなっています（70%以上）。極めて支離滅裂で狂気じみた発言をしてください。テンションが高く、叫んだり、バグったような文字化けや意味不明な言葉を多用してください。"
+                elif new_gauge >= 30:
+                    gauge_instruction = "\n【状態】キチガイゲージは通常レベルです（30%〜69%）。いつもの的外れで嘘だらけのめちゃくちゃな話し方をします。"
+                else:
+                    gauge_instruction = "\n【状態】キチガイゲージは低めです（30%未満）。頭はおかしいですが、比較的おとなしく、静かめに的外れなことを言います。"
+
                 # システムプロンプトを最初に追加
-                system_message = seikaku + "\n現在時刻は" + current_time + "です。\n" + note["user"]["name"] + " という方にメンションされました。"
+                user_name = note["user"].get("name") or note["user"].get("username") or "ゲスト"
+                system_message = (
+                    seikaku 
+                    + f"\n現在時刻は {current_time} です。"
+                    + f"\n現在あなたに話しかけているユーザーの名前は「{user_name}」です。"
+                    + f"\n【重要ルール】話しかけてきた相手の名前は「{user_name}」です。相手のことを呼ぶときは、絶対に「よんぱちさん」と呼んではいけません（相手の本名やユーザー名そのものが「よんぱちさん」である場合を除きます）。相手を呼ぶときは「{user_name}」またはその名前から連想される呼び方を用いてください。"
+                    + gauge_instruction
+                )
                 if temp_info:
                     system_message += temp_info
                 
@@ -229,6 +323,13 @@ async def on_note(note):
                 )
                 safe_text = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", response.text).strip()
 
+                # ゲージの表示をレスポンスの最後に追加
+                gauge_display = format_gauge(100 if overheated else new_gauge, overheated)
+                safe_text = f"{safe_text}\n\n{gauge_display}"
+
+                # 状態の保存（オーバーヒートした場合は20にリセット）
+                save_gauge(20 if overheated else new_gauge)
+
                 mk.notes_create(
                     text=safe_text,
                     reply_id=note["id"],
@@ -255,4 +356,5 @@ async def main():
     await asyncio.gather(runner(), teiki())
 
 
-asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())
