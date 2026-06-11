@@ -27,22 +27,28 @@ WS_URL = "wss://" + Server + "/streaming?i=" + Token
 
 STATE_FILE = "gauge_state.json"
 
-def load_gauge() -> int:
+def load_gauge() -> dict:
     try:
         if os.path.exists(STATE_FILE):
             with open(STATE_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                return data.get("crazy_gauge", 50)
+                return {
+                    "crazy_gauge": data.get("crazy_gauge", 50),
+                    "last_reply_time": data.get("last_reply_time")
+                }
     except Exception as e:
-        print(f"Error loading gauge: {e}")
-    return 50
+        print(f"Error loading gauge state: {e}")
+    return {"crazy_gauge": 50, "last_reply_time": None}
 
-def save_gauge(value: int):
+def save_gauge(value: int, last_reply_time: str = None):
     try:
         with open(STATE_FILE, "w", encoding="utf-8") as f:
-            json.dump({"crazy_gauge": value}, f, ensure_ascii=False, indent=2)
+            json.dump({
+                "crazy_gauge": value,
+                "last_reply_time": last_reply_time
+            }, f, ensure_ascii=False, indent=2)
     except Exception as e:
-        print(f"Error saving gauge: {e}")
+        print(f"Error saving gauge state: {e}")
 
 def format_gauge(value: int, overheated: bool = False) -> str:
     if overheated:
@@ -58,35 +64,66 @@ def format_gauge(value: int, overheated: bool = False) -> str:
     bar = emoji * filled + "⬜" * empty
     return f"【キチガイゲージ: {bar} {value}%】"
 
-def update_gauge(current_value: int, text: str, temp: float = None) -> tuple[int, bool]:
-    # 1. Base random shift (range: -5 to +10)
-    change = random.randint(-5, 10)
+def update_gauge(current_value: int, last_reply_time_str: str, text: str, temp: float = None) -> tuple[int, bool, str]:
+    change = 0
+    now = datetime.now()
+    now_str = now.isoformat()
     
-    # 2. Keyword triggers
-    text_lower = text.lower()
-    chaos_keywords = ["キチガイ", "きちがい", "狂", "バカ", "あほ", "アホ", "馬鹿", "壊れる", "こわれる", "熱い", "あつい", "爆発", "火事", "熱", "温度", "rm -rf", "sudo", "バルス", "死ね", "壊す", "ファック", "fuck"]
-    calm_keywords = ["ありがとう", "落ち着いて", "おちついて", "冷やして", "冷静", "安全", "おつかれ", "よしよし", "いいこ", "平和", "ひやす", "冷ます"]
-    
-    for kw in chaos_keywords:
-        if kw in text_lower:
-            change += 15
-            break
+    # 1. 返信間隔による負荷（連投スパム検出）
+    if last_reply_time_str:
+        try:
+            last_time = datetime.fromisoformat(last_reply_time_str)
+            diff_seconds = (now - last_time).total_seconds()
             
-    for kw in calm_keywords:
-        if kw in text_lower:
-            change -= 15
-            break
+            if diff_seconds < 20:
+                change += 20  # 超高速連投：負荷最大
+            elif diff_seconds < 60:
+                change += 10  # 高速連投
+            elif diff_seconds > 300:
+                # 5分以上放置されると時間経過で冷却
+                cool_down = int((diff_seconds - 300) // 60)
+                change -= min(cool_down, 25)
+        except Exception as e:
+            print(f"Error parsing last_reply_time: {e}")
             
-    # 3. Temperature triggers
+    # 2. メッセージ長（処理負荷）
+    length = len(text)
+    if length > 100:
+        change += 15
+    elif length > 50:
+        change += 8
+    elif length < 5:
+        change -= 5
+        
+    # 3. 記号とテンション（感嘆符や草など）
+    excitement_symbols = text.count("!") + text.count("！") + text.count("?") + text.count("？") + text.count("w") + text.count("草")
+    if excitement_symbols >= 5:
+        change += 15
+    elif excitement_symbols >= 2:
+        change += 8
+        
+    # 句読点で終わる穏やかな文
+    if text.endswith(("。", "、", "ね", "よ", "ます")) and excitement_symbols == 0:
+        change -= 8
+
+    # 4. 時間帯（深夜テンション）
+    hour = now.hour
+    if 23 <= hour or hour < 5:
+        change += 10
+        
+    # 5. 気温による影響
     if temp is not None:
         if temp > 28.0:
             change += int((temp - 28.0) * 3) + 5
         elif temp < 18.0:
             change -= int((18.0 - temp) * 2) + 5
             
+    # ランダムな揺らぎ
+    change += random.randint(-5, 5)
+    
     new_value = current_value + change
     
-    # Check for overheat explosion scenario
+    # オーバーヒート判定とクランプ
     overheated = False
     if new_value >= 100:
         new_value = 100
@@ -94,7 +131,7 @@ def update_gauge(current_value: int, text: str, temp: float = None) -> tuple[int
     elif new_value < 0:
         new_value = 0
         
-    return new_value, overheated
+    return new_value, overheated, now_str
 
 seikaku = """
     あなたは頭が悪く、的外れな事しか言わないSBC両生類です
@@ -275,8 +312,10 @@ async def on_note(note):
                         temp_info = "\n[センサー情報]\nセンサーからの室温取得に失敗しました。\n※注意: キャラクター設定（嘘をつくなど）に関わらず、現在は『室温の測定に失敗した（測れなかった）』ということだけは絶対に正確にそのまま伝えてください（架空の室温の数値をでっち上げたりしないでください）。"
                 
                 # キチガイゲージの更新
-                current_gauge = load_gauge()
-                new_gauge, overheated = update_gauge(current_gauge, user_input, temp_val)
+                state = load_gauge()
+                current_gauge = state["crazy_gauge"]
+                last_reply_time_str = state["last_reply_time"]
+                new_gauge, overheated, now_str = update_gauge(current_gauge, last_reply_time_str, user_input, temp_val)
                 
                 # ゲージ状態に応じたシステム指示の追加
                 if overheated:
@@ -324,12 +363,8 @@ async def on_note(note):
                 )
                 safe_text = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", response.text).strip()
 
-                # ゲージの表示をレスポンスの最後に追加
-                gauge_display = format_gauge(100 if overheated else new_gauge, overheated)
-                safe_text = f"{safe_text}\n\n{gauge_display}"
-
                 # 状態の保存（オーバーヒートした場合は20にリセット）
-                save_gauge(20 if overheated else new_gauge)
+                save_gauge(20 if overheated else new_gauge, now_str)
 
                 mk.notes_create(
                     text=safe_text,
