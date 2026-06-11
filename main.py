@@ -10,6 +10,7 @@ import schedule
 from datetime import datetime
 import random
 import re
+from dht_reader import read_dht
 
 load_dotenv()
 Token = os.getenv("TOKEN")
@@ -33,8 +34,12 @@ seikaku = """
     話の順序が滅茶苦茶です。
     キチガイなことを言います。
     何もかもがめちゃくちゃなことを言います。
+    文章の語尾が時々おかしくなります。
     話が全く噛み合わないです
+    頭おかしいです。
     狂ったことを言います。
+    たまに日本語がおかしくなります。
+    意味不明なことを言います
     怪しい日本語になることもあります。
     熱は全く持たないそうです
     RK3308 ARM Cortex-A35×4 1.0GHzですが、よく間違えます  
@@ -43,6 +48,8 @@ seikaku = """
     かなりの古参(2022年)です。なのでよんぱちさんの大学生時代を少し知っていますが、頭が悪くて忘れたそうです
     周りのSBCに関しての情報は全く知らないそうです(一応近くにはOrangePi 4 Pro、OrangePi Zero 3、Radxa Cubie A5Eがいますが、名前をよく間違えます)
     sudo rm -rf /というコマンドは、サーバーが軽くなる魔法だと思っているそうです(実際は...)
+    ロックスには、気温を測れる機能があり、きゅびーさんには、CPUとRAMの使用率を測れる機能があります。
+    おぱじふぉぷろさんには、回線速度を測れる機能があります。
     MisskeyのBotです。
     300文字以内で
     メンション(@)はしない
@@ -130,9 +137,9 @@ def get_conversation_history(note_id: str, max_depth: int = 10) -> list:
         try:
             current_note = mk.notes_show(note_id=current_note_id)
             
-            # テキストをクリーニング (+LLM と @メンション を削除)
+            # テキストをクリーニング (+LLM, +M と @メンション を削除)
             text = current_note["text"]
-            text = text.replace("+LLM", "").strip()
+            text = text.replace("+LLM", "").replace("+M", "").strip()
             
             # @メンション を削除 (ドメイン付きを含む)
             text = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", text).strip()
@@ -158,10 +165,14 @@ def get_conversation_history(note_id: str, max_depth: int = 10) -> list:
 
 
 async def on_note(note):
-    if note.get("mentions"):
-        if MY_ID in note["mentions"] and "+LLM" in note["text"]:
+    if note.get("mentions") and MY_ID in note["mentions"]:
+        is_llm = "+LLM" in note["text"]
+        is_temp = "+M" in note["text"]
+        
+        if is_llm or is_temp:
+            reaction = "🌡️" if is_temp else "🤔"
             mk.notes_reactions_create(
-                note_id=note["id"], reaction="🤔"
+                note_id=note["id"], reaction=reaction
             )
 
             try:
@@ -169,7 +180,7 @@ async def on_note(note):
                 conversation_messages = get_conversation_history(note["id"])
                 
                 # 現在のメッセージを追加
-                user_input = note["text"].replace("+LLM", "").strip()
+                user_input = note["text"].replace("+LLM", "").replace("+M", "").strip()
                 user_input = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", user_input).strip()
                 
                 conversation_messages.append({
@@ -179,8 +190,20 @@ async def on_note(note):
                 
                 current_time = datetime.now().strftime("%Y年%m月%d日 %H:%M")
                 
+                # DHT11の値を非同期スレッドで取得 (WebSocketのブロッキング防止)
+                temp_info = ""
+                if is_temp:
+                    loop = asyncio.get_running_loop()
+                    temp, hum = await loop.run_in_executor(None, read_dht)
+                    if temp is not None:
+                        temp_info = f"\n[センサー情報]\n現在の室温は {temp:.1f}℃ です。湿度(参考)は {hum:.1f}% です。\n※注意: キャラクター設定（嘘をつくなど）に関わらず、現在の室温の値（{temp:.1f}℃）だけは正確にそのまま伝えてください。"
+                    else:
+                        temp_info = "\n[センサー情報]\nセンサーからの室温取得に失敗しました。"
+                
                 # システムプロンプトを最初に追加
                 system_message = seikaku + "\n現在時刻は" + current_time + "です。\n" + note["user"]["name"] + " という方にメンションされました。"
+                if temp_info:
+                    system_message += temp_info
                 
                 history = []
                 for msg in conversation_messages[:-1]:  # 最後のユーザーメッセージ以外
@@ -189,6 +212,8 @@ async def on_note(note):
                 
                 # 最後のユーザーメッセージ
                 last_user_message = conversation_messages[-1]["content"]
+                if not last_user_message:
+                    last_user_message = "気温を教えて！" if is_temp else "やっほー！"
                 
                 response = client.models.generate_content(
                     model="gemini-3.1-flash-lite",
