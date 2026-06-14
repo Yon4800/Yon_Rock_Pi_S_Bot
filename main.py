@@ -325,6 +325,17 @@ async def on_note(note):
             )
 
             try:
+                try:
+                    from shared_economy_helper import load_economy, save_economy, get_user_state
+                    econ_data = load_economy()
+                    user_name_real = note["user"].get("name") or note["user"].get("username") or "ゲスト"
+                    username_real = note["user"].get("username", "")
+                    user_state = get_user_state(econ_data, note["userId"], username_real, user_name_real)
+                    user_state["balance_cbc"] = round(user_state["balance_cbc"] + 100.0, 2)
+                    save_economy(econ_data)
+                except Exception as ex:
+                    print(f"Error updating economy in Rocks: {ex}")
+
                 # 会話履歴を取得
                 conversation_messages = get_conversation_history(note["id"])
                 
@@ -471,6 +482,7 @@ async def on_note(note):
                 # 状態の保存（オーバーヒートした場合は20にリセット）
                 save_gauge(20 if overheated else new_gauge, now_str)
 
+                safe_text += "\n(ロックスとお話ししたため、100 CBCを獲得しました！)"
                 mk.notes_create(
                     text=safe_text,
                     reply_id=note["id"],
