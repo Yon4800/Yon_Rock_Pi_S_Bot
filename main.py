@@ -482,7 +482,6 @@ async def on_note(note):
                 # 状態の保存（オーバーヒートした場合は20にリセット）
                 save_gauge(20 if overheated else new_gauge, now_str)
 
-                safe_text += "\n(ロックスとお話ししたため、100 CBCを獲得しました！)"
                 mk.notes_create(
                     text=safe_text,
                     reply_id=note["id"],
