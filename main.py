@@ -226,7 +226,7 @@ seikaku = """
     周りのSBCに関しての情報は全く知らないそうです(一応近くにはOrangePi 4 Pro、OrangePi Zero 3、Radxa Cubie A5Eがいますが、名前をよく間違えます)
     sudo rm -rf /というコマンドは、サーバーが軽くなる魔法だと思っているそうです(実際は...)
     ロックスには、気温を測れる機能があります。
-    きゅびーさんには、CPUとRAMの使用率を測れる機能があります。
+    きゅびーさんには、CPUとRAMの使用率を測れる機能と、通貨変換機能や、FX機能があります
     おぱじふぉぷろさんには、回線速度を測れる機能があります。
     おぱじゼロサンは、寝る機能と起きる機能と好感度システムがあります。
     MisskeyのBotです。
@@ -247,7 +247,21 @@ oyasumi = "22:00"
 oyasumi2 = "02:00"
 
 def jobX(current_time):
-    system_message = seikaku + "\n現在時刻は" + current_time + "です。"
+    rate_info = ""
+    try:
+        from shared_economy_helper import load_economy
+        econ_data = load_economy()
+        rate_cbc = econ_data["rates"]["CBC"]["current"]
+        rate_ogc = econ_data["rates"]["OGC"]["current"]
+        rate_info = (
+            f"\n【現在の為替レート情報】\n"
+            f"・1 $SBC = {rate_cbc:.2f} CBC\n"
+            f"・1 $SBC = {rate_ogc:.2f} OGC\n"
+        )
+    except Exception as e:
+        print(f"Error loading rates in jobX: {e}")
+
+    system_message = seikaku + rate_info + "\n現在時刻は" + current_time + "です。"
     response = client.models.generate_content(
         model="gemini-3.1-flash-lite",
         config=types.GenerateContentConfig(
@@ -363,6 +377,11 @@ async def on_note(note):
             )
 
             try:
+                rate_cbc = 100.0
+                rate_ogc = 100.0
+                user_cbc = 0.0
+                user_ogc = 0.0
+                user_sbc = 100.0
                 try:
                     from shared_economy_helper import load_economy, save_economy, get_user_state
                     econ_data = load_economy()
@@ -371,8 +390,25 @@ async def on_note(note):
                     user_state = get_user_state(econ_data, note["userId"], username_real, user_name_real)
                     user_state["balance_cbc"] = round(user_state["balance_cbc"] + 100.0, 2)
                     save_economy(econ_data)
+                    
+                    rate_cbc = econ_data["rates"]["CBC"]["current"]
+                    rate_ogc = econ_data["rates"]["OGC"]["current"]
+                    user_cbc = user_state["balance_cbc"]
+                    user_ogc = user_state["balance_ogc"]
+                    user_sbc = user_state["balance_sbc"]
                 except Exception as ex:
                     print(f"Error updating economy in Rocks: {ex}")
+
+                coin_info = (
+                    f"\n【通貨および資産情報】\n"
+                    f"・現在の為替レート:\n"
+                    f"  1 $SBC = {rate_cbc:.2f} CBC\n"
+                    f"  1 $SBC = {rate_ogc:.2f} OGC\n"
+                    f"・話しかけているユーザー（{note['user'].get('name') or note['user'].get('username') or 'ゲスト'}）の資産残高:\n"
+                    f"  CBC残高: {user_cbc:.2f} CBC\n"
+                    f"  OGC残高: {user_ogc:.2f} OGC\n"
+                    f"  $SBC残高: {user_sbc:.2f} $SBC\n"
+                )
 
                 # 会話履歴を取得
                 conversation_messages = get_conversation_history(note["id"])
@@ -483,6 +519,7 @@ async def on_note(note):
                 system_message = (
                     seikaku 
                     + f"\n現在時刻は {current_time} です。"
+                    + coin_info
                     + f"\n現在あなたに話しかけているユーザーの名前は「{user_name}」です。"
                     + f"\n【重要ルール】話しかけてきた相手の名前は「{user_name}」です。相手のことを呼ぶときは、絶対に「よんぱちさん」と呼んではいけません（相手の本名やユーザー名そのものが「よんぱちさん」である場合を除きます）。相手を呼ぶときは「{user_name}」またはその名前から連想される呼び方を用いてください。"
                     + f"\n【最重要ルール】あなたは自身の「キチガイゲージ」の存在やその具体的な値については、ユーザーに対して絶対に公表（言及）しないでください。ゲージ状態（{new_gauge}% など）はシステム内部の隠しステータスです。"
