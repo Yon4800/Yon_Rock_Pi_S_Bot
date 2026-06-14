@@ -10,6 +10,7 @@ import schedule
 from datetime import datetime
 import random
 import re
+import requests
 from dht_reader import read_dht
 
 load_dotenv()
@@ -25,32 +26,53 @@ client = genai.Client(api_key=Apikey)
 MY_ID = mk.i()["id"]
 WS_URL = "wss://" + Server + "/streaming?i=" + Token
 
-STATE_FILE = "gauge_state.json"
+GAUGE_STATE_PATH = os.getenv("GAUGE_STATE_PATH", "gauge_state.json")
 
 def load_gauge() -> dict:
-    try:
-        if os.path.exists(STATE_FILE):
-            with open(STATE_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
+    if GAUGE_STATE_PATH.startswith(("http://", "https://")):
+        try:
+            res = requests.get(GAUGE_STATE_PATH, headers={"Content-Type": "application/json"}, timeout=5)
+            if res.status_code == 200:
+                data = res.json()
                 return {
                     "crazy_gauge": data.get("crazy_gauge", 50),
                     "last_reply_time": data.get("last_reply_time")
                 }
-    except Exception as e:
-        print(f"Error loading gauge state: {e}")
+        except Exception as e:
+            print(f"Error loading remote gauge state: {e}")
+    else:
+        try:
+            if os.path.exists(GAUGE_STATE_PATH):
+                with open(GAUGE_STATE_PATH, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    return {
+                        "crazy_gauge": data.get("crazy_gauge", 50),
+                        "last_reply_time": data.get("last_reply_time")
+                    }
+        except Exception as e:
+            print(f"Error loading gauge state: {e}")
     return {"crazy_gauge": 50, "last_reply_time": None}
 
 def save_gauge(value: int, last_reply_time: str = None):
-    try:
-        with open(STATE_FILE, "w", encoding="utf-8") as f:
-            json.dump({
-                "crazy_gauge": value,
-                "last_reply_time": last_reply_time
-            }, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        print(f"Error saving gauge state: {e}")
+    data = {
+        "crazy_gauge": value,
+        "last_reply_time": last_reply_time
+    }
+    if GAUGE_STATE_PATH.startswith(("http://", "https://")):
+        try:
+            res = requests.put(GAUGE_STATE_PATH, json=data, headers={"Content-Type": "application/json"}, timeout=5)
+            if res.status_code not in (200, 201, 204):
+                print(f"Failed to save remote gauge state: {res.status_code}")
+        except Exception as e:
+            print(f"Error saving remote gauge state: {e}")
+    else:
+        try:
+            with open(GAUGE_STATE_PATH, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"Error saving gauge state: {e}")
 
-BONUS_FILE = "login_bonus.json"
+LOGIN_BONUS_PATH = os.getenv("LOGIN_BONUS_PATH", "login_bonus.json")
 
 ITEMS = [
     "焼き切れたRK3308チップ",
@@ -66,20 +88,36 @@ ITEMS = [
 ]
 
 def load_bonus() -> dict:
-    try:
-        if os.path.exists(BONUS_FILE):
-            with open(BONUS_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-    except Exception as e:
-        print(f"Error loading bonus state: {e}")
+    if LOGIN_BONUS_PATH.startswith(("http://", "https://")):
+        try:
+            res = requests.get(LOGIN_BONUS_PATH, headers={"Content-Type": "application/json"}, timeout=5)
+            if res.status_code == 200:
+                return res.json()
+        except Exception as e:
+            print(f"Error loading remote bonus state: {e}")
+    else:
+        try:
+            if os.path.exists(LOGIN_BONUS_PATH):
+                with open(LOGIN_BONUS_PATH, "r", encoding="utf-8") as f:
+                    return json.load(f)
+        except Exception as e:
+            print(f"Error loading bonus state: {e}")
     return {"users": {}}
 
 def save_bonus(data: dict):
-    try:
-        with open(BONUS_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        print(f"Error saving bonus state: {e}")
+    if LOGIN_BONUS_PATH.startswith(("http://", "https://")):
+        try:
+            res = requests.put(LOGIN_BONUS_PATH, json=data, headers={"Content-Type": "application/json"}, timeout=5)
+            if res.status_code not in (200, 201, 204):
+                print(f"Failed to save remote bonus state: {res.status_code}")
+        except Exception as e:
+            print(f"Error saving remote bonus state: {e}")
+    else:
+        try:
+            with open(LOGIN_BONUS_PATH, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"Error saving bonus state: {e}")
 
 def format_gauge(value: int, overheated: bool = False) -> str:
     if overheated:
