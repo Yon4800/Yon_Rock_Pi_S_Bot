@@ -11,7 +11,7 @@ from datetime import datetime
 import random
 import re
 import requests
-from dht_reader import read_dht
+from sensor_reader import read_sensors
 
 load_dotenv()
 Token = os.getenv("TOKEN")
@@ -225,7 +225,7 @@ seikaku = """
     かなりの古参(2022年)です。なのでよんぱちさんの大学生時代を少し知っていますが、頭が悪くて忘れたそうです
     周りのSBCに関しての情報は全く知らないそうです(一応近くにはOrangePi 4 Pro、OrangePi Zero 3、Radxa Cubie A5Eがいますが、名前をよく間違えます)
     sudo rm -rf /というコマンドは、サーバーが軽くなる魔法だと思っているそうです(実際は...)
-    ロックスには、気温を測れる機能があります。
+    ロックスには、気温、湿度、気圧を測れる機能があります。
     きゅびーさんには、CPUとRAMの使用率を測れる機能と、通貨変換機能や、FX機能があります
     おぱじふぉぷろさんには、回線速度を測れる機能があります。
     おぱじゼロサンは、寝る機能と起きる機能と好感度システムがあります。
@@ -424,17 +424,17 @@ async def on_note(note):
                 
                 current_time = datetime.now().strftime("%Y年%m月%d日 %H:%M")
                 
-                # DHT11の値を非同期スレッドで取得 (WebSocketのブロッキング防止)
+                # センサー（AHT20+BMP280）の値を非同期スレッドで取得 (WebSocketのブロッキング防止)
                 temp_info = ""
                 temp_val = None
                 if is_temp:
                     loop = asyncio.get_running_loop()
-                    temp, hum = await loop.run_in_executor(None, read_dht)
-                    if temp is not None:
+                    temp, hum, pres = await loop.run_in_executor(None, read_sensors)
+                    if temp is not None and hum is not None and pres is not None:
                         temp_val = temp
-                        temp_info = f"\n[センサー情報]\n現在の室温は {temp:.1f}℃ です。湿度(参考)は {hum:.1f}% です。\n※注意: キャラクター設定（嘘をつくなど）に関わらず、現在の室温の値（{temp:.1f}℃）だけは正確にそのまま伝えてください。"
+                        temp_info = f"\n[センサー情報]\n現在の室温は {temp:.1f}℃ です。湿度(参考)は {hum:.1f}% です。気圧は {pres:.1f}hPa です。\n※注意: キャラクター設定（嘘をつくなど）に関わらず、現在の室温の値（{temp:.1f}℃）、湿度の値（{hum:.1f}%）、気圧の値（{pres:.1f}hPa）だけは正確にそのまま伝えてください。"
                     else:
-                        temp_info = "\n[センサー情報]\nセンサーからの室温取得に失敗しました。\n※注意: キャラクター設定（嘘をつくなど）に関わらず、現在は『室温の測定に失敗した（測れなかった）』ということだけは絶対に正確にそのまま伝えてください（架空の室温の数値をでっち上げたりしないでください）。"
+                        temp_info = "\n[センサー情報]\nセンサーからの温度・湿度・気圧情報の取得に失敗しました。\n※注意: キャラクター設定（嘘をつくなど）に関わらず、現在は『センサー情報の測定に失敗した（測れなかった）』ということだけは絶対に正確にそのまま伝えてください（架空の数値をでっち上げたりしないでください）。"
                 
                 # キチガイゲージの更新
                 state = load_gauge()
