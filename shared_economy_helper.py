@@ -36,12 +36,26 @@ def update_exchange_rates(data, now):
             data["rates"][coin] = {"current": 100.0, "previous": 100.0}
         
         current = data["rates"][coin]["current"]
+        
+        # Calculate deviation from the baseline of 100.0
+        # Positive deviation means the rate is high (above 100), meaning currency is weak.
+        # Negative deviation means the rate is low (below 100), meaning currency is strong.
+        deviation = current - 100.0
+        
+        # We want the rate to return to 100.0.
+        # Adjust the probability of the rate decreasing (which makes the currency stronger).
+        # At current = 100.0, prob_decrease is 0.5.
+        # As current increases (weak currency), prob_decrease increases to pull it down.
+        # As current decreases (strong currency), prob_decrease decreases to pull it up.
+        prob_decrease = 0.5 + (deviation / 200.0)
+        prob_decrease = max(0.05, min(0.95, prob_decrease))
+        
         if random.random() < 0.20:
             change = random.uniform(0.5, 4.0)
         else:
             change = random.uniform(0.1, 0.5)
             
-        if random.random() < 0.5:
+        if random.random() < prob_decrease:
             change = -change
             
         new_rate = current + change
