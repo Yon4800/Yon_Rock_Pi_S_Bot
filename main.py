@@ -383,7 +383,7 @@ async def on_note(note):
                 user_ogc = 0.0
                 user_sbc = 100.0
                 try:
-                    from shared_economy_helper import load_economy, save_economy, get_user_state
+                    from shared_economy_helper import load_economy, save_economy, get_user_state, get_recent_rates_history_desc
                     econ_data = load_economy()
                     user_name_real = note["user"].get("name") or note["user"].get("username") or "ゲスト"
                     username_real = note["user"].get("username", "")
@@ -396,14 +396,17 @@ async def on_note(note):
                     user_cbc = user_state["balance_cbc"]
                     user_ogc = user_state["balance_ogc"]
                     user_sbc = user_state["balance_sbc"]
+                    history_desc = get_recent_rates_history_desc(limit=5)
                 except Exception as ex:
                     print(f"Error updating economy in Rocks: {ex}")
+                    history_desc = "直近の為替履歴データはありません。"
 
                 coin_info = (
                     f"\n【通貨および資産情報】\n"
                     f"・現在の為替レート:\n"
                     f"  1 $SBC = {rate_cbc:.2f} CBC\n"
                     f"  1 $SBC = {rate_ogc:.2f} OGC\n"
+                    f"\n{history_desc}\n"
                     f"・話しかけているユーザー（{note['user'].get('name') or note['user'].get('username') or 'ゲスト'}）の資産残高:\n"
                     f"  CBC残高: {user_cbc:.2f} CBC\n"
                     f"  OGC残高: {user_ogc:.2f} OGC\n"
@@ -516,6 +519,17 @@ async def on_note(note):
 
                 # システムプロンプトを最初に追加
                 user_name = note["user"].get("name") or note["user"].get("username") or "ゲスト"
+                
+                rate_rules = (
+                    "\n【会話による為替操作ルール】\n"
+                    "・あなたは会話相手とのやり取りや、あなたの狂気度（キチガイゲージ）の状態に応じて、CBC（Cubie Coin）またはOGC（OrangePi Coin）の為替レートを動かすことができます。\n"
+                    "・キチガイゲージが高い場合（70%以上やオーバーヒートなど）や、話が噛み合わなくて興奮した時など、気分や狂気に応じて、CBCまたはOGCのレートを大きく変動させてください。\n"
+                    "  タグの形式: `[RATE_CHANGE: CBC X.X]` または `[RATE_CHANGE: OGC X.X]`（X.Xには変動幅を指定。例: `[RATE_CHANGE: CBC +2.5]`、`[RATE_CHANGE: OGC -4.0]`）\n"
+                    "  変動幅は -5.0 から +5.0 の間で自由に設定してください。\n"
+                    "・特にレートを動かす必要がない場合は、タグを出力しないでください。\n"
+                    "・タグはメッセージの最後に付与してください（ユーザーに表示する返答メッセージには含めないでください）。"
+                )
+                
                 system_message = (
                     seikaku 
                     + f"\n現在時刻は {current_time} です。"
@@ -524,6 +538,7 @@ async def on_note(note):
                     + f"\n【重要ルール】話しかけてきた相手の名前は「{user_name}」です。相手のことを呼ぶときは、絶対に「よんぱちさん」と呼んではいけません（相手の本名やユーザー名そのものが「よんぱちさん」である場合を除きます）。相手を呼ぶときは「{user_name}」またはその名前から連想される呼び方を用いてください。"
                     + f"\n【最重要ルール】あなたは自身の「キチガイゲージ」の存在やその具体的な値については、ユーザーに対して絶対に公表（言及）しないでください。ゲージ状態（{new_gauge}% など）はシステム内部の隠しステータスです。"
                     + gauge_instruction
+                    + rate_rules
                 )
                 if bonus_instruction:
                     system_message += bonus_instruction
@@ -552,7 +567,23 @@ async def on_note(note):
                         )
                     ],
                 )
-                safe_text = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", response.text).strip()
+                
+                response_text = response.text
+                match_rate = re.search(r"\[RATE_CHANGE:\s*(CBC|OGC)\s*([+-]?\d+(?:\.\d+)?)\]", response_text)
+                if match_rate:
+                    try:
+                        from shared_economy_helper import apply_rate_change, save_economy
+                        coin = match_rate.group(1).upper()
+                        rate_delta = float(match_rate.group(2))
+                        # ユーザー指示に基づく安全クランプ（最大5.0）
+                        rate_delta = max(-5.0, min(5.0, rate_delta))
+                        apply_rate_change(econ_data, coin, rate_delta)
+                        save_economy(econ_data)
+                        response_text = re.sub(r"\[RATE_CHANGE:\s*(?:CBC|OGC)\s*[+-]?\d+(?:\.\d+)?\]", "", response_text).strip()
+                    except Exception as e:
+                        print(f"Error applying rate change in Rocks: {e}")
+                        
+                safe_text = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", response_text).strip()
 
                 # 状態の保存（オーバーヒートした場合は20にリセット）
                 save_gauge(20 if overheated else new_gauge, now_str)

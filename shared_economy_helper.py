@@ -28,6 +28,55 @@ def get_economy_filepath():
     parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     return os.path.abspath(os.path.join(parent_dir, "shared_economy.json"))
 
+def get_history_filepath():
+    parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    history_file = os.path.join(parent_dir, "rates_history.csv")
+    return os.path.abspath(history_file)
+
+def log_rates_to_history(cbc_rate, ogc_rate):
+    history_file = get_history_filepath()
+    file_exists = os.path.exists(history_file)
+    now_str = datetime.now().isoformat()
+    try:
+        with open(history_file, 'a', encoding='utf-8') as f:
+            if not file_exists:
+                f.write("timestamp,cbc,ogc\n")
+            f.write(f"{now_str},{cbc_rate},{ogc_rate}\n")
+    except Exception as e:
+        print(f"Error logging rates to history: {e}")
+
+def get_recent_rates_history_desc(limit=5):
+    history_file = get_history_filepath()
+    # Fallback to local if parent file doesn't exist yet (migration check)
+    if not os.path.exists(history_file):
+        local_history_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rates_history.csv")
+        if os.path.exists(local_history_file):
+            history_file = local_history_file
+            
+    if not os.path.exists(history_file):
+        return "直近の為替履歴データはありません。"
+        
+    try:
+        with open(history_file, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+        
+        # Get headers and rows
+        rows = [line.strip().split(',') for line in lines[1:] if line.strip()]
+        recent_rows = rows[-limit:]
+        
+        if not recent_rows:
+            return "直近の為替履歴データはありません。"
+            
+        desc = "【直近の為替レート推移履歴】\n"
+        for row in recent_rows:
+            if len(row) >= 3:
+                dt = datetime.fromisoformat(row[0])
+                time_str = dt.strftime("%m-%d %H:%M")
+                desc += f"・{time_str}時点: 1 $SBC = {float(row[1]):.2f} CBC / {float(row[2]):.2f} OGC\n"
+        return desc
+    except Exception as e:
+        return f"為替履歴の取得中にエラーが発生しました: {e}"
+
 def update_exchange_rates(data, now):
     for coin in ["CBC", "OGC"]:
         if "rates" not in data:
@@ -65,6 +114,7 @@ def update_exchange_rates(data, now):
         data["rates"][coin]["current"] = new_rate
         
     data["last_rate_update"] = now.isoformat()
+    log_rates_to_history(data["rates"]["CBC"]["current"], data["rates"]["OGC"]["current"])
 
 def check_and_update_rates_on_load(data):
     now = datetime.now()
@@ -197,3 +247,19 @@ def get_user_state(data, user_id, username=None, display_name=None):
     if display_name:
         user_data["display_name"] = display_name
     return user_data
+
+def apply_rate_change(data, coin, delta):
+    if "rates" not in data:
+        data["rates"] = {}
+    if coin not in data["rates"]:
+        data["rates"][coin] = {"current": 100.0, "previous": 100.0}
+    
+    current = data["rates"][coin]["current"]
+    new_rate = current + delta
+    new_rate = max(10.0, min(500.0, round(new_rate, 2)))
+    
+    data["rates"][coin]["previous"] = current
+    data["rates"][coin]["current"] = new_rate
+    data["last_rate_update"] = datetime.now().isoformat()
+    
+    log_rates_to_history(data["rates"]["CBC"]["current"], data["rates"]["OGC"]["current"])
