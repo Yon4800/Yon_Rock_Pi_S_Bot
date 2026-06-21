@@ -76,6 +76,23 @@ def get_talk_participants(note_id, mk):
             break
     return participants
 
+def get_talk_participant_counts(note_id, mk, bot_ids):
+    counts = {bot_id: 0 for bot_id in bot_ids}
+    current_note_id = note_id
+    depth = 0
+    while current_note_id and depth < 20:
+        try:
+            current_note = mk.notes_show(note_id=current_note_id)
+            user_id = current_note["userId"]
+            if user_id in counts:
+                counts[user_id] += 1
+            current_note_id = current_note.get("replyId")
+            depth += 1
+        except Exception:
+            break
+    return counts
+
+
 
 GAUGE_STATE_PATH = os.getenv("GAUGE_STATE_PATH", "gauge_state.json")
 
@@ -453,20 +470,37 @@ async def on_note(note):
                 return
                 
         history = get_conversation_history(note["id"])
-        if len(history) >= 5:
+        if len(history) >= 10:
             return
             
-        participants = get_talk_participants(note["id"], mk)
+        counts = get_talk_participant_counts(note["id"], mk, bot_ids)
         
-        remaining_bots = []
+        # Determine max_rounds based on number of participants
+        if len(target_bot_ids) == 4:
+            max_rounds = 2
+        else:
+            max_rounds = 3
+            
+        # Group candidates to prevent immediate ping-pong
+        sender_id = note["userId"]
+        primary_candidates = []
+        secondary_candidates = []
+        
         for name, bot in bots.items():
-            if bot.get("id") and bot["id"] != MY_ID:
-                if bot["id"] in target_bot_ids and bot["id"] not in participants:
-                    remaining_bots.append(bot)
-                    
+            b_id = bot.get("id")
+            if b_id and b_id != MY_ID and b_id in target_bot_ids:
+                spoken_count = counts.get(b_id, 0)
+                if spoken_count < max_rounds:
+                    if b_id != sender_id:
+                        primary_candidates.append(bot)
+                    else:
+                        secondary_candidates.append(bot)
+                        
         next_bot = None
-        if remaining_bots:
-            next_bot = random.choice(remaining_bots)
+        if primary_candidates:
+            next_bot = random.choice(primary_candidates)
+        elif secondary_candidates:
+            next_bot = random.choice(secondary_candidates)
             
         sender_id = note["userId"]
         sender_name = bot_ids.get(sender_id, note["user"].get("name") or note["user"].get("username") or "ゲスト")
