@@ -26,6 +26,57 @@ client = genai.Client(api_key=Apikey)
 MY_ID = mk.i()["id"]
 WS_URL = "wss://" + Server + "/streaming?i=" + Token
 
+BOT_NAME = "Yon_Rock_Pi_S"
+
+BOT_SUMMARIES = {
+    "Cubie_A5E_San": "Radxa Cubie A5E (きゅびーさん): 小さくて省電力なシングルボードコンピュータ娘。24時間稼働の社畜で、給料（CBC）を欲しがっている。OrangePi 4 Proの生意気な性格が気に入らず、Rock Pi S of ロックスの頭の悪さに困っている。",
+    "OrangePi_4_Pro": "OrangePi 4 Pro (おぱじ・フォプロ): 少し大きくて気が強く、煽ったりマウントを取ったりするSBC御局娘。科学者ぶっており、Radxa Cubie A5Eをいつもバカにしている。社畜をエリートの誇りだと思っている。",
+    "opizero3_llm": "OrangePi Zero 3 (オパジゼロサン): 元気いっぱいのSBC娘。親身でオタク話が好きで、よく眠る。Cubie A5Eと仲良くしたいが寄り添ってもらえない。妹のOrangePi 4 Proを調子に乗っていてイキリで鬱陶しいと思っている。",
+    "Yon_Rock_Pi_S": "Radxa Rock Pi S (ロックス): 頭が悪く、的外れで嘘や狂ったことしか言わないSBC両生類。日本語が怪しく、sudo rm -rf / を魔法のコマンドだと思っている。"
+}
+
+def register_bot(bot_name, mk):
+    try:
+        from datetime import datetime, timedelta
+        from shared_economy_helper import load_economy, save_economy
+        my_info = mk.i()
+        my_id = my_info["id"]
+        my_username = my_info["username"]
+        
+        econ_data = load_economy()
+        if "bots" not in econ_data:
+            econ_data["bots"] = {}
+            
+        if bot_name not in econ_data["bots"]:
+            econ_data["bots"][bot_name] = {
+                "balance_cbc": 0.0,
+                "last_salary_paid_time": (datetime.now() - timedelta(days=1)).isoformat(),
+                "break_until": None,
+                "virtual_pc_count": 0,
+                "items": []
+            }
+        econ_data["bots"][bot_name]["id"] = my_id
+        econ_data["bots"][bot_name]["username"] = my_username
+        save_economy(econ_data)
+        print(f"Registered bot {bot_name} successfully (ID: {my_id}, username: {my_username})")
+    except Exception as e:
+        print(f"Error registering bot: {e}")
+
+def get_talk_participants(note_id, mk):
+    participants = set()
+    current_note_id = note_id
+    depth = 0
+    while current_note_id and depth < 10:
+        try:
+            current_note = mk.notes_show(note_id=current_note_id)
+            participants.add(current_note["userId"])
+            current_note_id = current_note.get("replyId")
+            depth += 1
+        except Exception:
+            break
+    return participants
+
+
 GAUGE_STATE_PATH = os.getenv("GAUGE_STATE_PATH", "gauge_state.json")
 
 def load_gauge() -> dict:
@@ -358,6 +409,136 @@ def get_conversation_history(note_id: str, max_depth: int = 10) -> list:
 
 
 async def on_note(note):
+    # --- +TALK implementation ---
+    note_text = note.get("text") or ""
+    is_talk_cmd = "+TALK" in note_text.upper()
+
+    if is_talk_cmd:
+        if note["userId"] == MY_ID:
+            return
+            
+        try:
+            from shared_economy_helper import load_economy
+            econ_data = load_economy()
+        except Exception as e:
+            print(f"Error loading economy in +TALK: {e}")
+            return
+            
+        bots = econ_data.get("bots", {})
+        bot_ids = {bot["id"]: name for name, bot in bots.items() if "id" in bot}
+        
+        is_mentioned = (note.get("mentions") and MY_ID in note["mentions"])
+        if not is_mentioned:
+            return
+            
+        try:
+            starting_note = note
+            depth = 0
+            while starting_note.get("replyId") and depth < 10:
+                starting_note = mk.notes_show(note_id=starting_note["replyId"])
+                depth += 1
+            
+            starting_mentions = [m for m in starting_note.get("mentions", []) if m in bot_ids]
+        except Exception as e:
+            print(f"Error resolving starting note in +TALK: {e}")
+            starting_mentions = [MY_ID]
+            
+        if len(starting_mentions) <= 1:
+            target_bot_ids = set(bot_ids.keys())
+        else:
+            target_bot_ids = set(starting_mentions)
+            
+        if note.get("replyId") is None:
+            if starting_mentions and starting_mentions[0] != MY_ID:
+                return
+                
+        history = get_conversation_history(note["id"])
+        if len(history) >= 5:
+            return
+            
+        participants = get_talk_participants(note["id"], mk)
+        
+        remaining_bots = []
+        for name, bot in bots.items():
+            if bot.get("id") and bot["id"] != MY_ID:
+                if bot["id"] in target_bot_ids and bot["id"] not in participants:
+                    remaining_bots.append(bot)
+                    
+        next_bot = None
+        if remaining_bots:
+            next_bot = random.choice(remaining_bots)
+            
+        sender_id = note["userId"]
+        sender_name = bot_ids.get(sender_id, note["user"].get("name") or note["user"].get("username") or "ゲスト")
+        
+        topic = note_text.replace("+TALK", "").replace("+talk", "").strip()
+        topic = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", topic).strip()
+        
+        conversation_messages = []
+        for msg in history:
+            role = "model" if msg["role"] == "assistant" else "user"
+            conversation_messages.append(
+                types.Content(role=role, parts=[types.Part(text=msg["content"])])
+            )
+            
+        from datetime import datetime
+        instruction = seikaku + f"\n現在時刻は {datetime.now().strftime('%Y年%m月%d日 %H:%M')} です。\n"
+        if next_bot:
+            next_bot_friendly = "ボット"
+            for name, b in bots.items():
+                if b.get("id") == next_bot["id"]:
+                    next_bot_friendly = name
+                    break
+            instruction += (
+                f"\n【グループ会話中 (+TALK)】\n"
+                f"あなたはSBCボット同士のグループ会話に参加しています。\n"
+                f"会話履歴の最後の発言者は『{sender_name}』で、話しかけられたお題は『{topic}』です。\n"
+                f"あなたの次に発言するボットは『{next_bot_friendly}』です。\n"
+                f"指示: あなたのキャラクター設定（{BOT_NAME}）に基づいて、最後の発言者に向けて返答を書いてください。次のボットへの指名や『+TALK』タグは自動で付与されるため、本文には含めないでください。メンション（@記号）も絶対に含めないでください。"
+            )
+        else:
+            instruction += (
+                f"\n【グループ会話中 (+TALK - 最終回)】\n"
+                f"あなたはSBCボット同士のグループ会話に参加しています。\n"
+                f"会話履歴の最後の発言者は『{sender_name}』で、話しかけられたお題は『{topic}』です。\n"
+                f"全ての指名ボットが発言し終えたため、あなたが最終発言者（締めくくり）となります。\n"
+                f"指示: あなたのキャラクター設定（{BOT_NAME}）に基づいて、会話を綺麗に締めくくる返答を書いてください。他のボットを指名したり、『+TALK』タグを含めたり、メンションを含めたりしないでください。"
+            )
+            
+        try:
+            mk.notes_reactions_create(note_id=note["id"], reaction="💬")
+        except Exception:
+            pass
+            
+        await asyncio.sleep(random.uniform(5.0, 10.0))
+        
+        try:
+            response = client.models.generate_content(
+                model="gemini-3.1-flash-lite",
+                config=types.GenerateContentConfig(system_instruction=instruction),
+                contents=conversation_messages
+            )
+            reply_text = response.text.strip()
+            reply_text = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", reply_text).strip()
+            
+            if next_bot:
+                reply_text += f"\nねえ、@{next_bot['username']} はどう思う？ +TALK"
+                mk.notes_create(
+                    text=reply_text,
+                    reply_id=note["id"],
+                    visibility=NoteVisibility.HOME
+                )
+            else:
+                mk.notes_create(
+                    text=reply_text,
+                    reply_id=note["id"],
+                    visibility=NoteVisibility.HOME,
+                    no_extract_mentions=True
+                )
+        except Exception as e:
+            print(f"Error generating/posting in Yon_Rock_Pi_S +TALK: {e}")
+        return
+
     if note.get("mentions") and MY_ID in note["mentions"]:
         note_text = note.get("text") or ""
         is_llm = "+LLM" in note_text or "+LB" in note_text or "ログボ" in note_text or "ログインボーナス" in note_text or "持ち物" in note_text or "コレクション" in note_text or "ステータス" in note_text
@@ -611,6 +792,7 @@ async def on_follow(user):
 
 
 async def main():
+    register_bot(BOT_NAME, mk)
     await asyncio.gather(runner(), teiki())
 
 
