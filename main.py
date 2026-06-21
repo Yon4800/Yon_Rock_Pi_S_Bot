@@ -62,6 +62,31 @@ def register_bot(bot_name, mk):
     except Exception as e:
         print(f"Error registering bot: {e}")
 
+RESOLVED_BOTS = {}
+
+async def resolve_all_bots():
+    global RESOLVED_BOTS
+    env_usernames = {
+        "Cubie_A5E_San": os.getenv("BOT_USER_CUBIE", "Cubie_A5E_San"),
+        "OrangePi_4_Pro": os.getenv("BOT_USER_OPI4PRO", "OrangePi_4_Pro"),
+        "opizero3_llm": os.getenv("BOT_USER_OPIZERO3", "opizero3_llm"),
+        "Yon_Rock_Pi_S": os.getenv("BOT_USER_ROCKPIS", "Yon_Rock_Pi_S")
+    }
+    for b_name, uname in env_usernames.items():
+        if not uname:
+            continue
+        try:
+            loop = asyncio.get_event_loop()
+            u_info = await loop.run_in_executor(None, lambda: mk.users_show(username=uname))
+            if u_info:
+                RESOLVED_BOTS[b_name] = {
+                    "id": u_info["id"],
+                    "username": u_info["username"]
+                }
+                print(f"Resolved bot {b_name} -> ID: {u_info['id']}, Username: {u_info['username']}")
+        except Exception as e:
+            print(f"Warning: Could not resolve username {uname} for bot {b_name}: {e}")
+
 def get_talk_participants(note_id, mk):
     participants = set()
     current_note_id = note_id
@@ -441,7 +466,7 @@ async def on_note(note):
             print(f"Error loading economy in +TALK: {e}")
             return
             
-        bots = econ_data.get("bots", {})
+        bots = RESOLVED_BOTS
         bot_ids = {bot["id"]: name for name, bot in bots.items() if "id" in bot}
         
         is_mentioned = (note.get("mentions") and MY_ID in note["mentions"])
@@ -827,6 +852,7 @@ async def on_follow(user):
 
 async def main():
     register_bot(BOT_NAME, mk)
+    await resolve_all_bots()
     await asyncio.gather(runner(), teiki())
 
 
