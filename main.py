@@ -24,6 +24,7 @@ mk.token = Token
 client = genai.Client(api_key=Apikey)
 
 MY_ID = mk.i()["id"]
+MY_USERNAME = mk.i()["username"]
 WS_URL = "wss://" + Server + "/streaming?i=" + Token
 
 BOT_NAME = "Yon_Rock_Pi_S"
@@ -479,6 +480,10 @@ async def on_note(note):
         if note["userId"] == MY_ID:
             return
             
+        if note.get("replyId") is not None:
+            if f"@{MY_USERNAME}".lower() not in note_text.lower():
+                return
+                
         try:
             from shared_economy_helper import load_economy
             econ_data = load_economy()
