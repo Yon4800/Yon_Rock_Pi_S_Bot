@@ -565,7 +565,6 @@ async def on_note(note):
                 types.Content(role=role, parts=[types.Part(text=msg["content"])])
             )
             
-        from datetime import datetime
         instruction = seikaku + f"\n現在時刻は {datetime.now().strftime('%Y年%m月%d日 %H:%M')} です。\n"
         if next_bot:
             next_bot_friendly = "ボット"
