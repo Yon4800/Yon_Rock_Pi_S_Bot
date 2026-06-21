@@ -405,7 +405,17 @@ async def runner():
                 if data["body"]["type"] == "note":
                     note = data["body"]["body"]
                     await on_note(note)
-                if data["body"]["type"] == "followed":
+                elif data["body"]["type"] == "notification":
+                    notification = data["body"]["body"]
+                    if notification.get("type") in ["mention", "reply"]:
+                        note = notification.get("note")
+                        if note:
+                            await on_note(note)
+                    elif notification.get("type") == "followed":
+                        user = notification.get("user")
+                        if user:
+                            await on_follow(user)
+                elif data["body"]["type"] == "followed":
                     user = data["body"]["body"]
                     await on_follow(user)
             await asyncio.sleep(1)
