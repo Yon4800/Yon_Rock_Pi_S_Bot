@@ -665,23 +665,21 @@ async def on_note(note):
                 print(f"Error generating weird prompt: {pe}")
                 weird_prompt = f"weird chaotic broken glitchy illustration of {user_prompt}"
                 
-            # 2. Generate the image using gemini-3.1-flash-lite-image
+            # 2. Generate the image using Pollinations.ai (Free API)
             try:
-                image_response = client.models.generate_content(
-                    model="gemini-3.1-flash-lite-image",
-                    contents=[weird_prompt],
-                    config=GenerateContentConfig(
-                        response_modalities=[Modality.TEXT, Modality.IMAGE]
-                    )
-                )
+                import urllib.parse
+                encoded_prompt = urllib.parse.quote(weird_prompt)
+                url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1024&height=1024&nologo=true&private=true&safe=true"
                 
-                # Extract image bytes
-                image_bytes = None
-                for part in image_response.candidates[0].content.parts:
-                    if part.inline_data:
-                        image_bytes = part.inline_data.data
-                        break
-                        
+                def download_image():
+                    res = requests.get(url, timeout=30)
+                    if res.status_code == 200:
+                        return res.content
+                    raise Exception(f"Failed to fetch image from Pollinations.ai: status code {res.status_code}")
+
+                loop = asyncio.get_running_loop()
+                image_bytes = await loop.run_in_executor(None, download_image)
+                
                 if image_bytes:
                     import tempfile
                     temp_dir = tempfile.gettempdir()
