@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 import os
 from google import genai
 from google.genai import types
+from google.genai.types import GenerateContentConfig, Modality
 import schedule
 from datetime import datetime
 import random
@@ -628,6 +629,109 @@ async def on_note(note):
 
     if note.get("mentions") and MY_ID in note["mentions"]:
         note_text = note.get("text") or ""
+        
+        is_draw = "+DRAW" in note_text.upper() or "+IMAGE" in note_text.upper()
+        if is_draw:
+            try:
+                mk.notes_reactions_create(note_id=note["id"], reaction="🎨")
+            except:
+                pass
+            
+            user_prompt = note_text.replace("+DRAW", "").replace("+draw", "").replace("+IMAGE", "").replace("+image", "").strip()
+            user_prompt = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", user_prompt).strip()
+            if not user_prompt:
+                user_prompt = "weird hybrid animal SBC device"
+                
+            # 1. Generate weird prompt from Rocks' perspective
+            instruction = (
+                f"ユーザーから『{user_prompt}』というテーマで画像を生成してほしいと頼まれました。"
+                "あなた自身のキャラクター設定（嘘をつく、支離滅裂など）に基づいて、このお題を超現実的でカオスで奇妙で壊れたイラストの英語指示文（画像生成用の英語プロンプト）に書き換えてください。"
+                "出力は英語のプロンプト1文のみにしてください。説明や余計な言葉は一切含めないでください。単に画像生成モデル向けのプロンプト文字列だけを返してください。"
+            )
+            
+            try:
+                prompt_response = client.models.generate_content(
+                    model="gemini-3.1-flash-lite",
+                    config=GenerateContentConfig(
+                        system_instruction=seikaku
+                    ),
+                    contents=[instruction]
+                )
+                weird_prompt = prompt_response.text.strip()
+                # Clean up formatting
+                weird_prompt = re.sub(r"```.*?```", "", weird_prompt, flags=re.DOTALL).strip()
+                weird_prompt = weird_prompt.replace('"', '').replace("'", "")
+            except Exception as pe:
+                print(f"Error generating weird prompt: {pe}")
+                weird_prompt = f"weird chaotic broken glitchy illustration of {user_prompt}"
+                
+            # 2. Generate the image using gemini-3.1-flash-lite-image
+            try:
+                image_response = client.models.generate_content(
+                    model="gemini-3.1-flash-lite-image",
+                    contents=[weird_prompt],
+                    config=GenerateContentConfig(
+                        response_modalities=[Modality.TEXT, Modality.IMAGE]
+                    )
+                )
+                
+                # Extract image bytes
+                image_bytes = None
+                for part in image_response.candidates[0].content.parts:
+                    if part.inline_data:
+                        image_bytes = part.inline_data.data
+                        break
+                        
+                if image_bytes:
+                    import tempfile
+                    temp_dir = tempfile.gettempdir()
+                    tmp_path = os.path.join(temp_dir, f"rocks_gen_{int(datetime.now().timestamp())}.png")
+                    with open(tmp_path, "wb") as f:
+                        f.write(image_bytes)
+                        
+                    with open(tmp_path, "rb") as f:
+                        drive_file = mk.drive_files_create(f)
+                    file_id = drive_file["id"]
+                    
+                    try:
+                        os.remove(tmp_path)
+                    except:
+                        pass
+                        
+                    # Rocks' crazy reaction text
+                    sbc_instruction = (
+                        seikaku + f"\n現在時刻は {datetime.now().strftime('%Y年%m月%d日 %H:%M')} です。\n"
+                        "【状況】あなたはユーザーの指示でおかしな画像を生成することに成功し、ファイルをアップロードしました。"
+                        "【指示】画像の生成に成功したことを、あなたの狂ったキャラクター（頭のおかしいSBC両生類）として、面白おかしく叫んだり自慢したりする返答を書いてください。300文字以内で、メンションは含めないでください。"
+                    )
+                    text_response = client.models.generate_content(
+                        model="gemini-3.1-flash-lite",
+                        config=GenerateContentConfig(system_instruction=sbc_instruction),
+                        contents=["画像を生成してアップロードしたよ！"]
+                    )
+                    reply_text = text_response.text.strip()
+                    reply_text = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", reply_text).strip()
+                    
+                    mk.notes_create(
+                        text=reply_text,
+                        reply_id=note["id"],
+                        file_ids=[file_id],
+                        visibility=NoteVisibility.HOME,
+                        no_extract_mentions=True
+                    )
+                else:
+                    raise Exception("No image bytes found in response parts")
+            except Exception as e:
+                print(f"Error in gemini-3.1-flash-lite-image generation: {e}")
+                err_msg = "画像生成の処理中にエラーが発生したぞ！限界の512MB RAMがメルトダウンして爆発した！ぎゃー！"
+                mk.notes_create(
+                    text=err_msg,
+                    reply_id=note["id"],
+                    visibility=NoteVisibility.HOME,
+                    no_extract_mentions=True
+                )
+            return
+
         is_llm = "+LLM" in note_text or "+LB" in note_text or "ログボ" in note_text or "ログインボーナス" in note_text or "持ち物" in note_text or "コレクション" in note_text or "ステータス" in note_text
         is_temp = "+M" in note_text
         
