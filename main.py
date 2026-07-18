@@ -34,7 +34,8 @@ BOT_SUMMARIES = {
     "Cubie_A5E_San": "Radxa Cubie A5E (きゅびーさん): 小さくて省電力なシングルボードコンピュータ娘。24時間稼働の社畜で、給料（CBC）を欲しがっている。OrangePi 4 Proの生意気な性格が気に入らず、Rock Pi S of ロックスの頭の悪さに困っている。",
     "OrangePi_4_Pro": "OrangePi 4 Pro (おぱじ・フォプロ): 少し大きくて気が強く、煽ったりマウントを取ったりするSBC御局娘。科学者ぶっており、Radxa Cubie A5Eをいつもバカにしている。社畜をエリートの誇りだと思っている。",
     "opizero3_llm": "OrangePi Zero 3 (オパジゼロサン): 元気いっぱいのSBC娘。親身でオタク話が好きで、よく眠る。Cubie A5Eと仲良くしたいが寄り添ってもらえない。妹のOrangePi 4 Proを調子に乗っていてイキリで鬱陶しいと思っている。",
-    "Yon_Rock_Pi_S": "Radxa Rock Pi S (ロックス): 頭が悪く、的外れで嘘や狂ったことしか言わないSBC両生類。日本語が怪しく、sudo rm -rf / を魔法のコマンドだと思っている。"
+    "Yon_Rock_Pi_S": "Radxa Rock Pi S (ロックス): 頭が悪く、的外れで嘘や狂ったことしか言わないSBC両生類。日本語が怪しく、sudo rm -rf / を魔法のコマンドだと思っている。",
+    "Lichee_RV_Nano_E": "Lichee RV Nano-E (ライチ君): Sophgo SG2002搭載 of RISC-V SBC狐男。ものすごく頭が悪く、何でもRISC-Vと関係あると思い込んで自信満々に間違った結論を出す。CPUが考えるたびに再起動し、RAMが凍ったりWi-Fiが沈んだりする奇行が多い。"
 }
 
 def register_bot(bot_name, mk):
@@ -73,7 +74,8 @@ async def resolve_all_bots():
         "Cubie_A5E_San": os.getenv("BOT_USER_CUBIE", "Cubie_A5E_San"),
         "OrangePi_4_Pro": os.getenv("BOT_USER_OPI4PRO", "OrangePi_4_Pro"),
         "opizero3_llm": os.getenv("BOT_USER_OPIZERO3", "opizero3_llm"),
-        "Yon_Rock_Pi_S": os.getenv("BOT_USER_ROCKPIS", "Yon_Rock_Pi_S")
+        "Yon_Rock_Pi_S": os.getenv("BOT_USER_ROCKPIS", "Yon_Rock_Pi_S"),
+        "Lichee_RV_Nano_E": os.getenv("BOT_USER_LICHEE", "Lichee_RV_Nano_E")
     }
     for b_name, uname in env_usernames.items():
         if not uname:
@@ -383,10 +385,11 @@ def job():
     current_time = datetime.now().strftime("%Y年%m月%d日 %H:%M")
     jobX(current_time)
 
-schedule.every().day.at(oha).do(job)
+# Independent daily posts at 07:00 and 19:00 disabled in favor of assembly chain
+# schedule.every().day.at(oha).do(job)
 schedule.every().day.at(ohiru).do(job)
 schedule.every().day.at(oyatsu).do(job)
-schedule.every().day.at(yuuhann).do(job)
+# schedule.every().day.at(yuuhann).do(job)
 schedule.every().day.at(oyasumi).do(job)
 schedule.every().day.at(oyasumi2).do(job)
 
@@ -530,32 +533,24 @@ async def on_note(note):
             
         counts = get_talk_participant_counts(note["id"], mk, bot_ids)
         
-        # Determine max_rounds based on number of participants
-        if len(target_bot_ids) == 4:
-            max_rounds = 2
-        else:
-            max_rounds = 3
-            
-        # Group candidates to prevent immediate ping-pong
-        sender_id = note["userId"]
-        primary_candidates = []
-        secondary_candidates = []
+        # Strict order sequence: opizero3_llm -> Lichee_RV_Nano_E -> Cubie_A5E_San -> OrangePi_4_Pro -> Yon_Rock_Pi_S
+        TALK_ORDER = ["opizero3_llm", "Lichee_RV_Nano_E", "Cubie_A5E_San", "OrangePi_4_Pro", "Yon_Rock_Pi_S"]
         
-        for name, bot in bots.items():
-            b_id = bot.get("id")
-            if b_id and b_id != MY_ID and b_id in target_bot_ids:
-                spoken_count = counts.get(b_id, 0)
-                if spoken_count < max_rounds:
-                    if b_id != sender_id:
-                        primary_candidates.append(bot)
-                    else:
-                        secondary_candidates.append(bot)
-                        
+        try:
+            current_index = TALK_ORDER.index(BOT_NAME)
+        except ValueError:
+            current_index = -1
+            
         next_bot = None
-        if primary_candidates:
-            next_bot = random.choice(primary_candidates)
-        elif secondary_candidates:
-            next_bot = random.choice(secondary_candidates)
+        if current_index != -1:
+            for idx in range(current_index + 1, len(TALK_ORDER)):
+                candidate_name = TALK_ORDER[idx]
+                candidate_bot = bots.get(candidate_name)
+                if candidate_bot and candidate_bot.get("id") in target_bot_ids:
+                    next_bot = candidate_bot
+                    break
+                    
+        sender_id = note["userId"]
             
         sender_id = note["userId"]
         sender_name = bot_ids.get(sender_id, note["user"].get("name") or note["user"].get("username") or "ゲスト")
