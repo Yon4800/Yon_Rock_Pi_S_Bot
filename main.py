@@ -5,6 +5,18 @@ from misskey import Misskey, NoteVisibility
 from dotenv import load_dotenv
 import os
 from openrouter_helper import generate_llm_reply
+import schedule
+from datetime import datetime
+import random
+import re
+import requests
+from sensor_reader import read_sensors
+
+load_dotenv()
+Token = os.getenv("TOKEN")
+Server = os.getenv("SERVER")
+mk = Misskey(Server)
+mk.token = Token
 
 MY_ID = mk.i()["id"]
 MY_USERNAME = mk.i()["username"]
