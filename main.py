@@ -984,12 +984,13 @@ async def on_note(note):
                     system_message += temp_info
                 
                 history = []
-                for msg in conversation_messages[:-1]:  # 最後のユーザーメッセージ以外
-                    role = "model" if msg["role"] == "assistant" else "user"
-                    history.append(types.Content(role=role, parts=[types.Part(text=msg["content"])]))
+                if conversation_messages:
+                    for msg in conversation_messages[:-1]:  # 最後のユーザーメッセージ以外
+                        role = "model" if msg["role"] == "assistant" else "user"
+                        history.append(types.Content(role=role, parts=[types.Part(text=msg["content"] or "")]))
                 
                 # 最後のユーザーメッセージ
-                last_user_message = conversation_messages[-1]["content"]
+                last_user_message = conversation_messages[-1]["content"] if conversation_messages else ""
                 if not last_user_message:
                     last_user_message = "気温を教えて！" if is_temp else "やっほー！"
                 
