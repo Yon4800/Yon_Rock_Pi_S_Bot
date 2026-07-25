@@ -24,6 +24,25 @@ mk.token = Token
 # Google Genai クライアント初期化
 client = genai.Client(api_key=Apikey)
 
+SAFETY_SETTINGS = [
+    types.SafetySetting(
+        category=types.HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+        threshold=types.HarmBlockThreshold.BLOCK_NONE,
+    ),
+    types.SafetySetting(
+        category=types.HarmCategory.HARM_CATEGORY_HARASSMENT,
+        threshold=types.HarmBlockThreshold.BLOCK_NONE,
+    ),
+    types.SafetySetting(
+        category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+        threshold=types.HarmBlockThreshold.BLOCK_NONE,
+    ),
+    types.SafetySetting(
+        category=types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+        threshold=types.HarmBlockThreshold.BLOCK_NONE,
+    ),
+]
+
 MY_ID = mk.i()["id"]
 MY_USERNAME = mk.i()["username"]
 WS_URL = "wss://" + Server + "/streaming?i=" + Token
@@ -234,7 +253,7 @@ def save_bonus(data: dict):
 
 def format_gauge(value: int, overheated: bool = False) -> str:
     if overheated:
-        return "【キチガイゲージ: 💥💥💥💥💥💥💥💥💥💥 100% (オーバーヒート！)】"
+        return "【クレイジーゲージ: 💥💥💥💥💥💥💥💥💥💥 100% (オーバーヒート！)】"
     filled = value // 10
     empty = 10 - filled
     if value < 30:
@@ -244,7 +263,7 @@ def format_gauge(value: int, overheated: bool = False) -> str:
     else:
         emoji = "🔴"
     bar = emoji * filled + "⬜" * empty
-    return f"【キチガイゲージ: {bar} {value}%】"
+    return f"【クレイジーゲージ: {bar} {value}%】"
 
 def update_gauge(current_value: int, last_reply_time_str: str, text: str, temp: float = None) -> tuple[int, bool, str]:
     change = 0
@@ -322,7 +341,7 @@ seikaku = """
     嘘しか言いません。
     狂ったことしか言いません。
     話の順序が滅茶苦茶です。
-    キチガイなことを言います。
+    狂気染みたことを言います。
     何もかもがめちゃくちゃなことを言います。
     何を言っているのかわからないです。
     文章の語尾が時々おかしくなります。
@@ -413,6 +432,7 @@ def jobX(current_time):
         model="gemini-3.5-flash-lite",
         config=types.GenerateContentConfig(
             system_instruction=system_message,
+            safety_settings=SAFETY_SETTINGS,
         ),
         contents=types.Content(
             role="user", parts=[types.Part(text="定期投稿の時間だよ！")],
@@ -644,7 +664,7 @@ async def on_note(note):
         try:
             response = client.models.generate_content(
                 model="gemini-3.5-flash-lite",
-                config=types.GenerateContentConfig(system_instruction=instruction),
+                config=types.GenerateContentConfig(system_instruction=instruction, safety_settings=SAFETY_SETTINGS),
                 contents=conversation_messages
             )
             reply_text = (response.text or "").strip()
@@ -696,7 +716,8 @@ async def on_note(note):
                 prompt_response = client.models.generate_content(
                     model="gemini-3.5-flash-lite",
                     config=GenerateContentConfig(
-                        system_instruction=seikaku
+                        system_instruction=seikaku,
+                        safety_settings=SAFETY_SETTINGS,
                     ),
                     contents=[instruction]
                 )
@@ -749,7 +770,7 @@ async def on_note(note):
                     )
                     text_response = client.models.generate_content(
                         model="gemini-3.5-flash-lite",
-                        config=GenerateContentConfig(system_instruction=sbc_instruction),
+                        config=GenerateContentConfig(system_instruction=sbc_instruction, safety_settings=SAFETY_SETTINGS),
                         contents=["画像を生成してアップロードしたよ！"]
                     )
                     reply_text = (text_response.text or "").strip()
@@ -856,7 +877,7 @@ async def on_note(note):
                     else:
                         temp_info = "\n[センサー情報]\nセンサーからの温度・湿度・気圧情報の取得に失敗しました。\n※注意: キャラクター設定（嘘をつくなど）に関わらず、現在は『センサー情報の測定に失敗した（測れなかった）』ということだけは絶対に正確にそのまま伝えてください（架空の数値をでっち上げたりしないでください）。"
                 
-                # キチガイゲージの更新
+                # クレイジーゲージの更新
                 state = load_gauge()
                 current_gauge = state["crazy_gauge"]
                 last_reply_time_str = state["last_reply_time"]
@@ -1001,7 +1022,8 @@ async def on_note(note):
                 response = client.models.generate_content(
                     model="gemini-3.5-flash-lite",
                     config=types.GenerateContentConfig(
-                        system_instruction=system_message
+                        system_instruction=system_message,
+                        safety_settings=SAFETY_SETTINGS,
                     ),
                     contents=history
                     + [
