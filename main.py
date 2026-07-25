@@ -418,7 +418,8 @@ def jobX(current_time):
             role="user", parts=[types.Part(text="定期投稿の時間だよ！")],
         ),
     )
-    safe_text = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", response.text).strip()
+    raw_text = response.text or "（定期投稿の時間だけど何も浮かばなかったみたい...）"
+    safe_text = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", raw_text).strip()
     mk.notes_create(
         safe_text,
         visibility=NoteVisibility.HOME,
@@ -489,7 +490,7 @@ def get_conversation_history(note_id: str, max_depth: int = 10) -> list:
             current_note = mk.notes_show(note_id=current_note_id)
             
             # テキストをクリーニング (+LLM, +M と @メンション を削除)
-            text = current_note["text"]
+            text = current_note.get("text") or ""
             text = text.replace("+LLM", "").replace("+M", "").strip()
             
             # @メンション を削除 (ドメイン付きを含む)
@@ -646,7 +647,9 @@ async def on_note(note):
                 config=types.GenerateContentConfig(system_instruction=instruction),
                 contents=conversation_messages
             )
-            reply_text = response.text.strip()
+            reply_text = (response.text or "").strip()
+            if not reply_text:
+                reply_text = "（なにか言おうとして頭がフリーズしたみたい...）"
             reply_text = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", reply_text).strip()
             
             if next_bot:
@@ -697,10 +700,12 @@ async def on_note(note):
                     ),
                     contents=[instruction]
                 )
-                weird_prompt = prompt_response.text.strip()
+                weird_prompt = (prompt_response.text or "").strip()
                 # Clean up formatting
                 weird_prompt = re.sub(r"```.*?```", "", weird_prompt, flags=re.DOTALL).strip()
                 weird_prompt = weird_prompt.replace('"', '').replace("'", "")
+                if not weird_prompt:
+                    weird_prompt = f"weird chaotic broken glitchy illustration of {user_prompt}"
             except Exception as pe:
                 print(f"Error generating weird prompt: {pe}")
                 weird_prompt = f"weird chaotic broken glitchy illustration of {user_prompt}"
@@ -747,7 +752,9 @@ async def on_note(note):
                         config=GenerateContentConfig(system_instruction=sbc_instruction),
                         contents=["画像を生成してアップロードしたよ！"]
                     )
-                    reply_text = text_response.text.strip()
+                    reply_text = (text_response.text or "").strip()
+                    if not reply_text:
+                        reply_text = "画像を生成したよ！"
                     reply_text = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", reply_text).strip()
                     
                     mk.notes_create(
@@ -1004,7 +1011,10 @@ async def on_note(note):
                     ],
                 )
                 
-                response_text = response.text
+                response_text = response.text or ""
+                if not response_text:
+                    response_text = "（頭が真っ白になって何も言えなくなっちゃった...）"
+
                 match_rate = re.search(r"\[RATE_CHANGE:\s*(CBC|OGC)\s*([+-]?\d+(?:\.\d+)?)\]", response_text)
                 if match_rate:
                     try:
