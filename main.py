@@ -410,7 +410,7 @@ def jobX(current_time):
 
     system_message = seikaku + rate_info + "\n現在時刻は" + current_time + "です。"
     response = client.models.generate_content(
-        model="gemini-3.1-flash-lite",
+        model="gemini-3.5-flash-lite",
         config=types.GenerateContentConfig(
             system_instruction=system_message,
         ),
@@ -642,7 +642,7 @@ async def on_note(note):
         
         try:
             response = client.models.generate_content(
-                model="gemini-3.1-flash-lite",
+                model="gemini-3.5-flash-lite",
                 config=types.GenerateContentConfig(system_instruction=instruction),
                 contents=conversation_messages
             )
@@ -691,7 +691,7 @@ async def on_note(note):
             
             try:
                 prompt_response = client.models.generate_content(
-                    model="gemini-3.1-flash-lite",
+                    model="gemini-3.5-flash-lite",
                     config=GenerateContentConfig(
                         system_instruction=seikaku
                     ),
@@ -743,7 +743,7 @@ async def on_note(note):
                         "【指示】画像の生成に成功したことを、あなたの狂ったキャラクター（頭のおかしいSBC両生類）として、面白おかしく叫んだり自慢したりする返答を書いてください。300文字以内で、メンションは含めないでください。"
                     )
                     text_response = client.models.generate_content(
-                        model="gemini-3.1-flash-lite",
+                        model="gemini-3.5-flash-lite",
                         config=GenerateContentConfig(system_instruction=sbc_instruction),
                         contents=["画像を生成してアップロードしたよ！"]
                     )
@@ -760,7 +760,7 @@ async def on_note(note):
                 else:
                     raise Exception("No image bytes found in response parts")
             except Exception as e:
-                print(f"Error in gemini-3.1-flash-lite-image generation: {e}")
+                print(f"Error in gemini-3.5-flash-lite-image generation: {e}")
                 err_msg = "画像生成の処理中にエラーが発生したぞ！限界の512MB RAMがメルトダウンして爆発した！ぎゃー！"
                 mk.notes_create(
                     text=err_msg,
@@ -992,7 +992,7 @@ async def on_note(note):
                     last_user_parts = [types.Part(text="")]
 
                 response = client.models.generate_content(
-                    model="gemini-3.1-flash-lite",
+                    model="gemini-3.5-flash-lite",
                     config=types.GenerateContentConfig(
                         system_instruction=system_message
                     ),
