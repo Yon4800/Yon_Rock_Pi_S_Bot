@@ -601,7 +601,7 @@ async def on_note(note):
         sender_id = note["userId"]
         sender_name = bot_ids.get(sender_id, note["user"].get("name") or note["user"].get("username") or "ゲスト")
         
-        topic = note_text.replace("+TALK", "").replace("+talk", "").strip()
+        topic = (note_text or "").replace("+TALK", "").replace("+talk", "").strip()
         topic = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", topic).strip()
         
         conversation_messages = []
@@ -680,7 +680,7 @@ async def on_note(note):
             except:
                 pass
             
-            user_prompt = note_text.replace("+DRAW", "").replace("+draw", "").replace("+IMAGE", "").replace("+image", "").strip()
+            user_prompt = (note_text or "").replace("+DRAW", "").replace("+draw", "").replace("+IMAGE", "").replace("+image", "").strip()
             user_prompt = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", user_prompt).strip()
             if not user_prompt:
                 user_prompt = "weird hybrid animal SBC device"
@@ -834,7 +834,7 @@ async def on_note(note):
                 conversation_messages = get_conversation_history(note["id"])
                 
                 # 現在のメッセージを追加
-                user_input = note_text.replace("+LLM", "").replace("+M", "").replace("+LB", "").strip()
+                user_input = (note_text or "").replace("+LLM", "").replace("+M", "").replace("+LB", "").strip()
                 user_input = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", user_input).strip()
                 
                 conversation_messages.append({
