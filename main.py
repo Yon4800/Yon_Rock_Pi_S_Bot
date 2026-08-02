@@ -4,6 +4,7 @@ import websockets
 from misskey import Misskey, NoteVisibility
 from dotenv import load_dotenv
 import os
+from collections import OrderedDict
 from google import genai
 from google.genai import types
 from google.genai.types import GenerateContentConfig, Modality
@@ -86,7 +87,7 @@ def register_bot(bot_name, mk):
         print(f"Error registering bot: {e}")
 
 RESOLVED_BOTS = {}
-PROCESSED_NOTES = set()
+PROCESSED_NOTES = OrderedDict()
 
 async def resolve_all_bots():
     global RESOLVED_BOTS
@@ -542,9 +543,9 @@ async def on_note(note):
     if note_id:
         if note_id in PROCESSED_NOTES:
             return
-        PROCESSED_NOTES.add(note_id)
-        if len(PROCESSED_NOTES) > 200:
-            PROCESSED_NOTES.clear()
+        PROCESSED_NOTES[note_id] = True
+        if len(PROCESSED_NOTES) > 1000:
+            PROCESSED_NOTES.popitem(last=False)
 
     # --- +TALK implementation ---
     note_text = note.get("text") or ""
@@ -851,8 +852,8 @@ async def on_note(note):
                     f"  $SBC残高: {user_sbc:.2f} $SBC\n"
                 )
 
-                # 会話履歴を取得
-                conversation_messages = get_conversation_history(note["id"])
+                # 親ノートまでの会話履歴を取得
+                conversation_messages = get_conversation_history(note.get("replyId"))
                 
                 # 現在のメッセージを追加
                 user_input = (note_text or "").replace("+LLM", "").replace("+M", "").replace("+LB", "").strip()
