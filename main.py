@@ -440,18 +440,25 @@ async def on_status(status, is_notification: bool = False):
     # 1. グループ会話 (+TALK) / 朝礼
     if is_talk_cmd:
         current_step = parse_talk_step(note_text)
-        if not current_step or current_step > len(CHOREI_ORDER):
-            return
+        is_mentioned_directly = is_notification or mc.is_mentioned(status, my_id=MY_ID, my_username=MY_USERNAME, note_text=note_text)
 
-        expected_bot = CHOREI_ORDER[current_step - 1]
-        if expected_bot != BOT_NAME:
-            # 自分の順番ではない場合は即座に無視（重複返信や誤爆を完全防止）
-            return
-
-        is_mentioned = is_notification or mc.is_mentioned(status, my_id=MY_ID, my_username=MY_USERNAME, note_text=note_text)
-        # ステップ1（初回投稿）以外は前ボットからのバトン（メンション付き）なので、自分宛てメンションでなければ無視
-        if current_step > 1 and not is_mentioned:
-            return
+        if current_step and current_step > 1:
+            if current_step > len(CHOREI_ORDER):
+                return
+            expected_bot = CHOREI_ORDER[current_step - 1]
+            if expected_bot != BOT_NAME:
+                # 自分の順番ではない場合は即座に無視（重複返信防止）
+                return
+        else:
+            if is_mentioned_directly:
+                try:
+                    current_step = CHOREI_ORDER.index(BOT_NAME) + 1
+                except ValueError:
+                    current_step = 1
+            else:
+                if BOT_NAME != CHOREI_ORDER[0]:
+                    return
+                current_step = 1
 
         processed_store.add(status_id)
 
@@ -778,7 +785,29 @@ async def on_status(status, is_notification: bool = False):
             print(f"Error in RockPi LLM generation: {e}")
             reply_status("突然のカーネルパニック！sudo rm -rf /を実行しました（大嘘）")
 
+def is_recent_status(status, max_age_seconds=300) -> bool:
+    """
+    ステータスが直近（デフォルト5分以内）のものかどうかを判定。
+    古い投稿をすべて拾って応答する暴走やセキュリティリスクを防止。
+    """
+    created_at_str = status.get("created_at")
+    if not created_at_str:
+        return True
+    try:
+        dt = datetime.fromisoformat(created_at_str.replace("Z", "+00:00"))
+        now = datetime.now(dt.tzinfo)
+        age = (now - dt).total_seconds()
+        if age > max_age_seconds:
+            return False
+    except Exception:
+        pass
+    return True
+
 async def polling_runner():
+    """
+    Mastodon / Hollo REST API による安全な定期ポーリングループ
+    直前のもののみを対象とし、パブリックTLの無差別応答を防止
+    """
     print(f"[{BOT_NAME}] Starting Mastodon/Hollo polling runner...")
     poll_count = 0
     try:
@@ -788,16 +817,40 @@ async def polling_runner():
     except Exception as ex:
         print(f"[{BOT_NAME}] Error during initial auto-followback: {ex}")
 
+    # 起動時のセーフガード: 5分以上前の古い投稿は既読化し、起動時に一括応答しない
+    try:
+        init_notifs = mc.get_notifications(limit=15)
+        for notif in init_notifs:
+            st = notif.get("status")
+            if st and not is_recent_status(st, max_age_seconds=300):
+                processed_store.add(str(st.get("id")))
+
+        init_home = mc.get_home_timeline(limit=15)
+        for st in init_home:
+            if not is_recent_status(st, max_age_seconds=300):
+                processed_store.add(str(st.get("id")))
+    except Exception as e:
+        print(f"[{BOT_NAME}] Initial catchup safeguard notice: {e}")
+
     while True:
         try:
             poll_count += 1
-            notifications = mc.get_notifications(limit=15)
+            # 1. 自分宛ての通知（メンション）を直近のものから確認
+            notifications = mc.get_notifications(limit=10)
             for notif in reversed(notifications):
                 notif_type = notif.get("type")
                 if notif_type == "mention":
                     status = notif.get("status")
                     if status:
+                        sid = str(status.get("id"))
+                        if not sid or processed_store.is_processed(sid):
+                            continue
+                        if not is_recent_status(status, max_age_seconds=300):
+                            processed_store.add(sid)
+                            continue
                         await on_status(status, is_notification=True)
+                        break  # 一度にすべて拾わず、直前のものを1件ずつ処理
+
                 elif notif_type in ["follow", "follow_request"]:
                     account = notif.get("account", {})
                     acc_id = str(account.get("id"))
@@ -806,17 +859,24 @@ async def polling_runner():
                             mc.authorize_follow_request(acc_id)
                         mc.follow_account(acc_id)
 
-            home_statuses = mc.get_home_timeline(limit=15)
-            pub_statuses = mc.get_public_timeline(local=True, limit=15)
+            # 2. ホームタイムライン（フォロー中の仲間）の直前投稿のみ確認
+            # ※ パブリックTLの無差別監視はセキュリティ上廃止
+            home_statuses = mc.get_home_timeline(limit=10)
             seen_ids = set()
-            for st in home_statuses + pub_statuses:
+            for st in home_statuses:
                 sid = str(st.get("id"))
                 if not sid or sid in seen_ids or processed_store.is_processed(sid):
                     continue
                 seen_ids.add(sid)
+
+                if not is_recent_status(st, max_age_seconds=300):
+                    processed_store.add(sid)
+                    continue
+
                 txt = MastodonClient.html_to_text(st.get("content", ""))
                 if "+TALK" in txt.upper() or mc.is_mentioned(st, my_id=MY_ID, my_username=MY_USERNAME, note_text=txt):
                     await on_status(st, is_notification=False)
+                    break  # 一度に大量に処理せず、直前のものを調べて応答
 
             if poll_count % 20 == 0:
                 followed = mc.auto_follow_back()
