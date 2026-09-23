@@ -52,11 +52,16 @@ class MastodonClient:
     def __init__(self, server: str, token: str):
         if not server:
             raise ValueError("Server URL or hostname is required.")
-        server = server.strip()
+        server = server.strip().strip("'\"")
         if not server.startswith(("http://", "https://")):
             server = "https://" + server
         self.base_url = server.rstrip("/")
-        self.token = token.strip() if token else ""
+        
+        token = token.strip().strip("'\"") if token else ""
+        if token.lower().startswith("bearer "):
+            token = token[7:].strip()
+        self.token = token
+        
         self.headers = {
             "Authorization": f"Bearer {self.token}",
             "User-Agent": "SBCBot/2.0 (Mastodon/Hollo compatible)"
@@ -82,6 +87,24 @@ class MastodonClient:
             return self._me
         url = f"{self.base_url}/api/v1/accounts/verify_credentials"
         res = self.session.get(url, timeout=10)
+        if res.status_code == 401:
+            masked_token = (self.token[:6] + "..." + self.token[-4:]) if len(self.token) > 10 else "***"
+            raise requests.exceptions.HTTPError(
+                f"\n============================================================\n"
+                f"【認証エラー 401 Unauthorized】\n"
+                f"サーバー: {url}\n"
+                f"現在のTOKEN: {masked_token}\n\n"
+                f"【考えられる主な原因】\n"
+                f"1. Misskey時代のトークンをそのまま使っている（Mastodon/Holloでは使えません）\n"
+                f"2. ブラウザ承認後に画面に出た『認証コード（code）』を .env に貼り付けている\n"
+                f"   ※ 画面に出る文字列は一時的な認証コードであり、アクセストークン本体ではありません。\n"
+                f"   ※ 'python get_token.py' を実行し、ターミナル上でコードを入力すると正式な TOKEN が発行されます。\n"
+                f"3. トークンの指定ミスまたは無効化\n\n"
+                f"【解決策】\n"
+                f"ターミナルで 'python get_token.py' を実行して、正式なアクセストークン（TOKEN）を発行してください。\n"
+                f"============================================================",
+                response=res
+            )
         res.raise_for_status()
         self._me = res.json()
         return self._me
