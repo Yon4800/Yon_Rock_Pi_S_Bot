@@ -223,3 +223,88 @@ class MastodonClient:
         except Exception as e:
             print(f"[MastodonClient] Error searching user {username}: {e}")
         return None
+
+    def follow_account(self, account_id: str) -> bool:
+        """指定アカウントをフォロー（フォロバ）する"""
+        url = f"{self.base_url}/api/v1/accounts/{account_id}/follow"
+        try:
+            res = self.session.post(url, json={"reblogs": True}, timeout=10)
+            if res.status_code not in (200, 201):
+                res = self.session.post(url, data={"reblogs": "true"}, timeout=10)
+            if res.status_code in (200, 201):
+                print(f"[MastodonClient] Successfully followed account {account_id}")
+                return True
+            else:
+                print(f"[MastodonClient] Failed to follow account {account_id}: Status {res.status_code}, Body: {res.text}")
+        except Exception as e:
+            print(f"[MastodonClient] Exception following account {account_id}: {e}")
+        return False
+
+    def authorize_follow_request(self, account_id: str) -> bool:
+        """フォローリクエストを承認する（鍵垢の場合）"""
+        url = f"{self.base_url}/api/v1/follow_requests/{account_id}/authorize"
+        try:
+            res = self.session.post(url, json={}, timeout=10)
+            if res.status_code in (200, 201):
+                print(f"[MastodonClient] Successfully authorized follow request from {account_id}")
+                return True
+        except Exception as e:
+            print(f"[MastodonClient] Exception authorizing follow request {account_id}: {e}")
+        return False
+
+    def get_followers(self, account_id: Optional[str] = None, limit: int = 80) -> List[Dict[str, Any]]:
+        """フォロワー一覧を取得"""
+        aid = account_id
+        if not aid and self._me:
+            aid = str(self._me.get("id"))
+        if not aid:
+            try:
+                aid = str(self.get_me().get("id"))
+            except Exception:
+                return []
+        url = f"{self.base_url}/api/v1/accounts/{aid}/followers"
+        try:
+            res = self.session.get(url, params={"limit": limit}, timeout=10)
+            if res.status_code == 200:
+                return res.json()
+        except Exception as e:
+            print(f"[MastodonClient] Error fetching followers: {e}")
+        return []
+
+    def get_relationships(self, account_ids: List[str]) -> Dict[str, Dict[str, Any]]:
+        """複数アカウントとのフォロー関係を取得"""
+        if not account_ids:
+            return {}
+        url = f"{self.base_url}/api/v1/accounts/relationships"
+        params = [("id[]", str(aid)) for aid in account_ids]
+        try:
+            res = self.session.get(url, params=params, timeout=10)
+            if res.status_code == 200:
+                data = res.json()
+                return {str(item["id"]): item for item in data}
+        except Exception as e:
+            print(f"[MastodonClient] Error fetching relationships: {e}")
+        return {}
+
+    def auto_follow_back(self) -> int:
+        """自分をフォローしているが、まだ自分がフォローバックしていないユーザーを自動フォロー"""
+        my_info = self.get_me()
+        my_id = str(my_info.get("id"))
+        followers = self.get_followers(my_id, limit=80)
+        if not followers:
+            return 0
+        
+        target_ids = [str(f["id"]) for f in followers if str(f["id"]) != my_id]
+        if not target_ids:
+            return 0
+
+        relationships = self.get_relationships(target_ids)
+        followed_count = 0
+        for uid in target_ids:
+            rel = relationships.get(uid)
+            if not rel or not rel.get("following"):
+                print(f"[MastodonClient] Auto-followback: following account {uid}...")
+                if self.follow_account(uid):
+                    followed_count += 1
+        return followed_count
+
