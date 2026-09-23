@@ -156,15 +156,28 @@ class MastodonClient:
             return False
 
     def react(self, status_id: str, emoji: Optional[str] = None) -> bool:
-        """リアクション (Hollo等の絵文字リアクションを試行し、不可ならfavourite)"""
+        """リアクション (Hollo等の絵文字リアクションを試行。emoji指定時はfavouriteとの二重リアクションを防止)"""
         if emoji:
             try:
+                # 1. Akkoma / Pleroma / Hollo形式 (PUT)
                 url = f"{self.base_url}/api/v1/statuses/{status_id}/emoji_reactions/{emoji}"
                 res = self.session.put(url, timeout=5)
                 if res.status_code in (200, 201, 204):
                     return True
             except Exception:
                 pass
+
+            try:
+                # 2. Misskey形式 (POST)
+                url_mk = f"{self.base_url}/api/notes/reactions/create"
+                res_mk = self.session.post(url_mk, json={"noteId": str(status_id), "reaction": emoji}, timeout=5)
+                if res_mk.status_code in (200, 201, 204):
+                    return True
+            except Exception:
+                pass
+
+            # 絵文字指定時は、絵文字と星の二重リアクション付加を防ぐためfavouriteへのフォールバックを行わない
+            return False
         return self.favourite(status_id)
 
     def get_status(self, status_id: str) -> Optional[Dict[str, Any]]:

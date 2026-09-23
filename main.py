@@ -79,13 +79,41 @@ def parse_talk_step(text: str):
     """
     if "+TALK" not in text.upper():
         return None
-    m = re.search(r'\+TALK\s*[\(\[]?\s*([1-8])(?:\s*/\s*8|\s*回目)?[\)\]]?', text, re.IGNORECASE)
+    m = re.search(r'\+TALK\s*[\(\[]?\s*(\d+)(?:\s*/\s*8|\s*回目)?[\)\]]?', text, re.IGNORECASE)
     if m:
         try:
-            return int(m.group(1))
+            step_num = int(m.group(1))
+            if step_num > 8:
+                return None
+            return step_num
         except ValueError:
             pass
     return 1
+
+def get_designated_bot_for_talk(status, note_text: str) -> Optional[str]:
+    """
+    +TALK投稿に対して応答・リアクションを担当するボット（唯一の1体）を決定する。
+    他のボットは重複応答・重複リアクションを防ぐため即座に無視する。
+    """
+    step = parse_talk_step(note_text)
+    if not step or step > len(CHOREI_ORDER):
+        return None
+
+    # ステップ2以降（例: +TALK (2/8) 〜 (8/8)）は、CHOREI_ORDERで指定されたボットのみが担当
+    if step > 1:
+        return CHOREI_ORDER[step - 1]
+
+    # ステップ1（ユーザーからの会話開始時）:
+    # メンション指定がある場合はそのボットを最優先（複数メンション時はCHOREI_ORDER順で最初の1体）
+    for b_name in ["opizero3_llm", "OrangePi_4_Pro", "Yon_Rock_Pi_S", "Cubie_A5E_San"]:
+        b_info = RESOLVED_BOTS.get(b_name, {})
+        b_uname = b_info.get("username") or b_name
+        b_id = b_info.get("id") or ""
+        if mc and mc.is_mentioned(status, my_id=b_id, my_username=b_uname, note_text=note_text):
+            return b_name
+
+    # メンション指定がない場合は、朝礼/会話の起点である第1走者 (opizero3_llm) が担当
+    return CHOREI_ORDER[0]
 
 processed_store = ProcessedStore(os.path.join(os.path.dirname(__file__), "processed_status_ids.json"))
 
@@ -437,25 +465,18 @@ async def on_status(status, is_notification: bool = False):
 
     # 1. グループ会話 (+TALK) / 朝礼
     if is_talk_cmd:
-        current_step = parse_talk_step(note_text)
-        is_mentioned_directly = is_notification or mc.is_mentioned(status, my_id=MY_ID, my_username=MY_USERNAME, note_text=note_text)
+        designated_bot = get_designated_bot_for_talk(status, note_text)
+        if designated_bot != BOT_NAME:
+            # 自分が担当ボットではない場合、即座に終了（二重リアクション・二重返信を完全防止）
+            return
 
-        if current_step and current_step > 1:
-            if current_step > len(CHOREI_ORDER):
-                return
-            expected_bot = CHOREI_ORDER[current_step - 1]
-            if expected_bot != BOT_NAME:
-                # 自分の順番ではない場合は即座に無視（重複返信防止）
-                return
+        step = parse_talk_step(note_text)
+        if step and step > 1:
+            current_step = step
         else:
-            if is_mentioned_directly:
-                try:
-                    current_step = CHOREI_ORDER.index(BOT_NAME) + 1
-                except ValueError:
-                    current_step = 1
-            else:
-                if BOT_NAME != CHOREI_ORDER[0]:
-                    return
+            try:
+                current_step = CHOREI_ORDER.index(BOT_NAME) + 1
+            except ValueError:
                 current_step = 1
 
         processed_store.add(status_id)
