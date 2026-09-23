@@ -57,15 +57,34 @@ BOT_SUMMARIES = {
 
 # 朝礼・グループ会話の厳密な2周シーケンス（計8回）
 CHOREI_ORDER = [
-    "opizero3_llm",    # Step 0
-    "OrangePi_4_Pro",  # Step 1
-    "Yon_Rock_Pi_S",   # Step 2
-    "Cubie_A5E_San",   # Step 3
-    "opizero3_llm",    # Step 4
-    "OrangePi_4_Pro",  # Step 5
-    "Yon_Rock_Pi_S",   # Step 6
-    "Cubie_A5E_San"    # Step 7 (最終締めくくり)
+    "opizero3_llm",    # Step 1
+    "OrangePi_4_Pro",  # Step 2
+    "Yon_Rock_Pi_S",   # Step 3
+    "Cubie_A5E_San",   # Step 4
+    "opizero3_llm",    # Step 5
+    "OrangePi_4_Pro",  # Step 6
+    "Yon_Rock_Pi_S",   # Step 7
+    "Cubie_A5E_San"    # Step 8 (最終締めくくり)
 ]
+
+def parse_talk_step(text: str):
+    """
+    +TALKタグからステップ番号(1〜8)を解析する。
+    例:
+      '+TALK' -> 1 (ユーザー開始時)
+      '+TALK (2/8)' -> 2
+      '+TALK 3' -> 3
+      '+TALK 4/8' -> 4
+    """
+    if "+TALK" not in text.upper():
+        return None
+    m = re.search(r'\+TALK\s*[\(\[]?\s*([1-8])(?:\s*/\s*8|\s*回目)?[\)\]]?', text, re.IGNORECASE)
+    if m:
+        try:
+            return int(m.group(1))
+        except ValueError:
+            pass
+    return 1
 
 processed_store = ProcessedStore(os.path.join(os.path.dirname(__file__), "processed_status_ids.json"))
 
@@ -420,9 +439,18 @@ async def on_status(status, is_notification: bool = False):
 
     # 1. グループ会話 (+TALK) / 朝礼
     if is_talk_cmd:
+        current_step = parse_talk_step(note_text)
+        if not current_step or current_step > len(CHOREI_ORDER):
+            return
+
+        expected_bot = CHOREI_ORDER[current_step - 1]
+        if expected_bot != BOT_NAME:
+            # 自分の順番ではない場合は即座に無視（重複返信や誤爆を完全防止）
+            return
+
         is_mentioned = is_notification or mc.is_mentioned(status, my_id=MY_ID, my_username=MY_USERNAME, note_text=note_text)
-        
-        if status.get("in_reply_to_id") is not None and not is_mentioned:
+        # ステップ1（初回投稿）以外は前ボットからのバトン（メンション付き）なので、自分宛てメンションでなければ無視
+        if current_step > 1 and not is_mentioned:
             return
 
         processed_store.add(status_id)
@@ -434,28 +462,19 @@ async def on_status(status, is_notification: bool = False):
             print(f"Error loading economy in RockPi +TALK: {e}")
             return
 
+        # 会話履歴の取得（コンテキスト補助用）
         ctx = mc.get_context(status_id)
         ancestors = ctx.get("ancestors", [])
-        depth = len(ancestors)
-        
-        current_step = depth
-        if current_step >= len(CHOREI_ORDER):
-            print(f"[+TALK] Conversation reached max rounds ({len(CHOREI_ORDER)}). Stopping.")
-            return
 
-        expected_bot = CHOREI_ORDER[current_step]
-        if expected_bot != BOT_NAME:
-            print(f"[+TALK] Step {current_step}: Expected {expected_bot}, but I am {BOT_NAME}. Skipping.")
-            return
-
+        # 次にバトンを渡すボット（current_step + 1）があるか判定
         next_step = current_step + 1
         next_bot_obj = None
-        if next_step < len(CHOREI_ORDER):
-            subsequent_bot_name = CHOREI_ORDER[next_step]
+        if next_step <= len(CHOREI_ORDER):
+            subsequent_bot_name = CHOREI_ORDER[next_step - 1]
             next_bot_obj = RESOLVED_BOTS.get(subsequent_bot_name)
 
         sender_name = account.get("display_name") or account.get("username") or "ゲスト"
-        topic = note_text.replace("+TALK", "").replace("+talk", "").strip()
+        topic = re.sub(r'\+TALK(?:\s*[\(\[]?\s*[1-8](?:\s*/\s*8|\s*回目)?[\)\]]?)?', '', note_text, flags=re.IGNORECASE).strip()
         topic = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", topic).strip()
 
         conversation_messages = []
@@ -464,17 +483,17 @@ async def on_status(status, is_notification: bool = False):
             txt = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", txt).strip()
             role = "model" if str(st.get("account", {}).get("id")) == MY_ID else "user"
             conversation_messages.append(types.Content(role=role, parts=[types.Part(text=txt)]))
-        conversation_messages.append(types.Content(role="user", parts=[types.Part(text=topic)]))
+        conversation_messages.append(types.Content(role="user", parts=[types.Part(text=topic if topic else "グループ会話を続けてください")]))
 
         instruction = seikaku + f"\n現在時刻は {datetime.now().strftime('%Y年%m月%d日 %H:%M')} です。\n"
         if next_bot_obj:
             next_bot_friendly = subsequent_bot_name
             instruction += (
-                f"\n【グループ会話中 (+TALK) - 順番: {current_step + 1}/{len(CHOREI_ORDER)}】\n"
+                f"\n【グループ会話中 (+TALK) - 順番: {current_step}/{len(CHOREI_ORDER)}】\n"
                 f"あなたはSBCボット同士のグループ会話・朝礼に参加しています。\n"
                 f"直前の発言者は『{sender_name}』で、話題は『{topic}』です。\n"
                 f"あなたの次に発言するボットは『{next_bot_friendly}』です。\n"
-                f"指示: あなたのキャラクター（{BOT_NAME}、頭が悪く的外れで狂ったロックス）に基づいて、直前の発言者に向けて返答を書いてください。次のボットへの指名や『+TALK』タグは自動付与されるため本文には含めないでください。メンション（@記号）も絶対に含めないでください。"
+                f"指示: あなたのキャラクター（{BOT_NAME}、頭が悪く的外れで狂ったロックス）に基づいて、直前の発言者に向けて返答を書いてください。次のボットへの指名や『+TALK』タグはシステムが自動付与するため本文には含めないでください。メンション（@記号）も絶対に含めないでください。"
             )
         else:
             instruction += (
@@ -499,7 +518,7 @@ async def on_status(status, is_notification: bool = False):
             reply_text = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", reply_text).strip()
 
             if next_bot_obj:
-                reply_text += f"\nねえ、@{next_bot_obj['username']} はどう思う？ +TALK"
+                reply_text += f"\nねえ、@{next_bot_obj['username']} はどう思う？ +TALK ({next_step}/8)"
 
             vis = status.get("visibility", "public")
             mc.post_status(
@@ -507,9 +526,9 @@ async def on_status(status, is_notification: bool = False):
                 in_reply_to_id=status_id,
                 visibility=vis
             )
-            print(f"[RockPi] [+TALK] Step {current_step} replied successfully.")
+            print(f"[{BOT_NAME}] [+TALK] Step {current_step}/{len(CHOREI_ORDER)} replied successfully.")
         except Exception as e:
-            print(f"Error in RockPi +TALK: {e}")
+            print(f"Error in {BOT_NAME} +TALK: {e}")
         return
 
     # 2. メンション処理 (+LLM, +M, +INFO, +LOGBO, +BONUS)
