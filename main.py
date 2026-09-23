@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 import random
 import re
 import requests
+from typing import Optional, Dict, Any, List
 
 from mastodon_client import MastodonClient, ProcessedStore
 from sensor_reader import read_sensors
@@ -90,7 +91,7 @@ def parse_talk_step(text: str):
             pass
     return 1
 
-def get_designated_bot_for_talk(status, note_text: str) -> Optional[str]:
+def get_designated_bot_for_talk(status, note_text: str):
     """
     +TALK投稿に対して応答・リアクションを担当するボット（唯一の1体）を決定する。
     他のボットは重複応答・重複リアクションを防ぐため即座に無視する。
@@ -764,6 +765,8 @@ async def on_status(status, is_notification: bool = False):
             history_msgs = get_conversation_history_from_context(status_id)
             user_input = note_text.replace("+LLM", "").replace("+BONUS", "").replace("+LOGBO", "").strip()
             user_input = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", user_input).strip()
+            if not user_input:
+                user_input = "ロックス、何か面白いこと言って！"
 
             contents = []
             for msg in history_msgs:
@@ -785,7 +788,6 @@ async def on_status(status, is_notification: bool = False):
             match = re.search(r"\[RATE_CHANGE:\s*(CBC|OGC)\s*([+-]?\d+(?:\.\d+)?)\]", raw_text)
             if match:
                 try:
-                    from shared_economy_helper import apply_rate_change, save_economy
                     target_coin = match.group(1).upper()
                     delta = float(match.group(2))
                     apply_rate_change(econ_data, target_coin, delta)

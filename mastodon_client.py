@@ -176,8 +176,7 @@ class MastodonClient:
             except Exception:
                 pass
 
-            # 絵文字指定時は、絵文字と星の二重リアクション付加を防ぐためfavouriteへのフォールバックを行わない
-            return False
+        # サーバーが絵文字リアクション非対応（標準MastodonやHolloなど）の場合、星（ふぁぼ）で確実に反応
         return self.favourite(status_id)
 
     def get_status(self, status_id: str) -> Optional[Dict[str, Any]]:
