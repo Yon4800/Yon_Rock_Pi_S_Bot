@@ -132,21 +132,27 @@ async def resolve_all_bots():
         "opizero3_llm": os.getenv("BOT_USER_OPIZERO3", "opizero3_llm"),
         "Yon_Rock_Pi_S": os.getenv("BOT_USER_ROCKPIS", "Yon_Rock_Pi_S")
     }
+    for b_name, uname in env_usernames.items():
+        RESOLVED_BOTS[b_name] = {"id": "", "username": uname}
+
     try:
         from shared_economy_helper import load_economy
         econ_data = load_economy()
         if "bots" in econ_data:
             for b_name, b_info in econ_data["bots"].items():
-                if isinstance(b_info, dict) and "id" in b_info and "username" in b_info:
-                    RESOLVED_BOTS[b_name] = {
-                        "id": str(b_info["id"]),
-                        "username": b_info["username"]
-                    }
+                if isinstance(b_info, dict):
+                    b_id = str(b_info.get("id", ""))
+                    b_uname = b_info.get("username", "")
+                    if b_id and not b_id.startswith("id_") and b_uname and not b_uname.endswith("_user"):
+                        RESOLVED_BOTS[b_name] = {
+                            "id": b_id,
+                            "username": b_uname
+                        }
     except Exception as e:
         print(f"Warning: Could not load bots from economy file: {e}")
 
     for b_name, uname in env_usernames.items():
-        if not uname or b_name in RESOLVED_BOTS:
+        if RESOLVED_BOTS.get(b_name, {}).get("id"):
             continue
         try:
             loop = asyncio.get_event_loop()
@@ -397,7 +403,7 @@ def get_conversation_history_from_context(status_id: str, max_depth: int = 10) -
         print(f"Error fetching conversation history in RockPi: {e}")
     return messages
 
-async def on_status(status):
+async def on_status(status, is_notification: bool = False):
     status_id = str(status.get("id"))
     if not status_id or processed_store.is_processed(status_id):
         return
@@ -414,9 +420,7 @@ async def on_status(status):
 
     # 1. グループ会話 (+TALK) / 朝礼
     if is_talk_cmd:
-        mentions = status.get("mentions", [])
-        mentioned_ids = [str(m.get("id")) for m in mentions]
-        is_mentioned = (MY_ID in mentioned_ids) or (f"@{MY_USERNAME.lower()}" in note_text.lower())
+        is_mentioned = is_notification or mc.is_mentioned(status, my_id=MY_ID, my_username=MY_USERNAME, note_text=note_text)
         
         if status.get("in_reply_to_id") is not None and not is_mentioned:
             return
@@ -434,20 +438,20 @@ async def on_status(status):
         ancestors = ctx.get("ancestors", [])
         depth = len(ancestors)
         
-        next_step = depth + 1
-        if next_step >= len(CHOREI_ORDER):
+        current_step = depth
+        if current_step >= len(CHOREI_ORDER):
             print(f"[+TALK] Conversation reached max rounds ({len(CHOREI_ORDER)}). Stopping.")
             return
 
-        expected_bot = CHOREI_ORDER[next_step]
+        expected_bot = CHOREI_ORDER[current_step]
         if expected_bot != BOT_NAME:
-            print(f"[+TALK] Step {next_step}: Expected {expected_bot}, but I am {BOT_NAME}. Skipping.")
+            print(f"[+TALK] Step {current_step}: Expected {expected_bot}, but I am {BOT_NAME}. Skipping.")
             return
 
-        subsequent_step = next_step + 1
+        next_step = current_step + 1
         next_bot_obj = None
-        if subsequent_step < len(CHOREI_ORDER):
-            subsequent_bot_name = CHOREI_ORDER[subsequent_step]
+        if next_step < len(CHOREI_ORDER):
+            subsequent_bot_name = CHOREI_ORDER[next_step]
             next_bot_obj = RESOLVED_BOTS.get(subsequent_bot_name)
 
         sender_name = account.get("display_name") or account.get("username") or "ゲスト"
@@ -458,7 +462,7 @@ async def on_status(status):
         for st in ancestors:
             txt = MastodonClient.html_to_text(st.get("content", ""))
             txt = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", txt).strip()
-            role = "model" if str(st["account"]["id"]) == MY_ID else "user"
+            role = "model" if str(st.get("account", {}).get("id")) == MY_ID else "user"
             conversation_messages.append(types.Content(role=role, parts=[types.Part(text=txt)]))
         conversation_messages.append(types.Content(role="user", parts=[types.Part(text=topic)]))
 
@@ -466,7 +470,7 @@ async def on_status(status):
         if next_bot_obj:
             next_bot_friendly = subsequent_bot_name
             instruction += (
-                f"\n【グループ会話中 (+TALK) - 順番: {next_step + 1}/{len(CHOREI_ORDER)}】\n"
+                f"\n【グループ会話中 (+TALK) - 順番: {current_step + 1}/{len(CHOREI_ORDER)}】\n"
                 f"あなたはSBCボット同士のグループ会話・朝礼に参加しています。\n"
                 f"直前の発言者は『{sender_name}』で、話題は『{topic}』です。\n"
                 f"あなたの次に発言するボットは『{next_bot_friendly}』です。\n"
@@ -497,20 +501,20 @@ async def on_status(status):
             if next_bot_obj:
                 reply_text += f"\nねえ、@{next_bot_obj['username']} はどう思う？ +TALK"
 
+            vis = status.get("visibility", "public")
             mc.post_status(
                 text=reply_text,
                 in_reply_to_id=status_id,
-                visibility="public"
+                visibility=vis
             )
-            print(f"[RockPi] [+TALK] Step {next_step} replied successfully.")
+            print(f"[RockPi] [+TALK] Step {current_step} replied successfully.")
         except Exception as e:
             print(f"Error in RockPi +TALK: {e}")
         return
 
     # 2. メンション処理 (+LLM, +M, +INFO, +LOGBO, +BONUS)
-    mentions = status.get("mentions", [])
-    mentioned_ids = [str(m.get("id")) for m in mentions]
-    if MY_ID not in mentioned_ids and f"@{MY_USERNAME.lower()}" not in note_text.lower():
+    is_for_me = is_notification or mc.is_mentioned(status, my_id=MY_ID, my_username=MY_USERNAME, note_text=note_text)
+    if not is_for_me:
         return
 
     is_llm = "+LLM" in note_text.upper()
@@ -549,8 +553,16 @@ async def on_status(status):
         new_gauge = 100
 
     def reply_status(text):
-        full_text = f"@{account.get('acct', account.get('username'))} {text}"
-        mc.post_status(full_text, in_reply_to_id=status_id, visibility="public")
+        try:
+            target_acct = account.get('acct') or account.get('username') or ''
+            if target_acct and not text.startswith(f"@{target_acct}"):
+                full_text = f"@{target_acct} {text}"
+            else:
+                full_text = text
+            vis = status.get("visibility", "public")
+            mc.post_status(full_text, in_reply_to_id=status_id, visibility=vis)
+        except Exception as ex:
+            print(f"Error replying status: {ex}")
 
     if is_info:
         mc.react(status_id, emoji="ℹ️")
@@ -766,7 +778,7 @@ async def polling_runner():
                 if notif_type == "mention":
                     status = notif.get("status")
                     if status:
-                        await on_status(status)
+                        await on_status(status, is_notification=True)
                 elif notif_type in ["follow", "follow_request"]:
                     account = notif.get("account", {})
                     acc_id = str(account.get("id"))
@@ -776,10 +788,16 @@ async def polling_runner():
                         mc.follow_account(acc_id)
 
             home_statuses = mc.get_home_timeline(limit=15)
-            for st in reversed(home_statuses):
+            pub_statuses = mc.get_public_timeline(local=True, limit=15)
+            seen_ids = set()
+            for st in home_statuses + pub_statuses:
+                sid = str(st.get("id"))
+                if not sid or sid in seen_ids or processed_store.is_processed(sid):
+                    continue
+                seen_ids.add(sid)
                 txt = MastodonClient.html_to_text(st.get("content", ""))
-                if "+TALK" in txt.upper():
-                    await on_status(st)
+                if "+TALK" in txt.upper() or mc.is_mentioned(st, my_id=MY_ID, my_username=MY_USERNAME, note_text=txt):
+                    await on_status(st, is_notification=False)
 
             if poll_count % 20 == 0:
                 followed = mc.auto_follow_back()

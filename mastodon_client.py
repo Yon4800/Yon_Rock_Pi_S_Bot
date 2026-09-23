@@ -184,10 +184,116 @@ class MastodonClient:
         try:
             res = self.session.get(url, timeout=10)
             if res.status_code == 200:
-                return res.json()
+                data = res.json()
+                if isinstance(data, dict) and "ancestors" in data:
+                    if len(data.get("ancestors", [])) > 0:
+                        return data
+                    # ancestorsが空でも、直近親の有無を確認
+                    curr_st = self.get_status(status_id)
+                    if not (curr_st and curr_st.get("in_reply_to_id")):
+                        return data
         except Exception as e:
             print(f"[MastodonClient] Error fetching context for {status_id}: {e}")
-        return {"ancestors": [], "descendants": []}
+        
+        # フォールバック: in_reply_to_id を手動で遡る
+        ancestors = []
+        curr_id = status_id
+        depth = 0
+        while curr_id and depth < 12:
+            st = self.get_status(curr_id)
+            if not st:
+                break
+            parent_id = st.get("in_reply_to_id")
+            if not parent_id:
+                break
+            parent_st = self.get_status(str(parent_id))
+            if not parent_st:
+                break
+            ancestors.insert(0, parent_st)
+            curr_id = str(parent_id)
+            depth += 1
+
+        return {"ancestors": ancestors, "descendants": []}
+
+    def is_mentioned(self, status: Dict[str, Any], my_id: Optional[str] = None, my_username: Optional[str] = None, note_text: Optional[str] = None) -> bool:
+        """アカウントがこのステータス内でメンションされているかを高精度判定"""
+        u_lower = (my_username or "").lower().strip()
+        mid = str(my_id).strip() if my_id else ""
+        
+        # 1. mentions リスト判定
+        for m in status.get("mentions", []):
+            if mid and str(m.get("id")) == mid:
+                return True
+            if u_lower:
+                m_user = m.get("username", "").lower().strip()
+                m_acct = m.get("acct", "").lower().strip().split("@")[0]
+                if m_user == u_lower or m_acct == u_lower:
+                    return True
+        
+        # 2. 返信先アカウント判定
+        if mid and str(status.get("in_reply_to_account_id")) == mid:
+            return True
+            
+        # 3. 本文中のユーザー名判定
+        txt = (note_text if note_text is not None else self.html_to_text(status.get("content", ""))).lower()
+        if u_lower:
+            if f"@{u_lower}" in txt or u_lower in txt:
+                return True
+                
+        return False
+
+    # --- Misskey 互換レイヤー ---
+    def notes_show(self, note_id: str) -> Dict[str, Any]:
+        """Misskey互換: notes/show"""
+        st = self.get_status(note_id) or {}
+        acc = st.get("account", {})
+        mentions = st.get("mentions", [])
+        return {
+            "id": str(st.get("id", note_id)),
+            "userId": str(acc.get("id", "")),
+            "user": {
+                "id": str(acc.get("id", "")),
+                "username": acc.get("username", ""),
+                "name": acc.get("display_name") or acc.get("username", "")
+            },
+            "text": self.html_to_text(st.get("content", "")),
+            "replyId": st.get("in_reply_to_id"),
+            "mentions": [str(m.get("id")) for m in mentions]
+        }
+
+    def notes_create(self, text: str, reply_id: Optional[str] = None, visibility: Any = "public", file_ids: Optional[List[str]] = None, **kwargs) -> Dict[str, Any]:
+        """Misskey互換: notes/create"""
+        vis_str = "public"
+        if visibility:
+            v = str(visibility).lower()
+            if "home" in v or "unlisted" in v:
+                vis_str = "unlisted"
+            elif "followers" in v or "private" in v:
+                vis_str = "private"
+            elif "specified" in v or "direct" in v:
+                vis_str = "direct"
+        return self.post_status(text=text, in_reply_to_id=reply_id, visibility=vis_str, media_ids=file_ids)
+
+    def drive_files_create(self, file_obj) -> Dict[str, Any]:
+        """Misskey互換: drive/files/create"""
+        if hasattr(file_obj, "name") and os.path.exists(file_obj.name):
+            mid = self.upload_media(file_obj.name)
+            return {"id": mid or ""}
+        elif hasattr(file_obj, "read"):
+            with tempfile.NamedTemporaryFile("wb", delete=False) as tf:
+                tf.write(file_obj.read())
+                tmp_name = tf.name
+            try:
+                mid = self.upload_media(tmp_name)
+                return {"id": mid or ""}
+            finally:
+                if os.path.exists(tmp_name):
+                    os.remove(tmp_name)
+        return {"id": ""}
+
+    def notes_reactions_create(self, note_id: str, reaction: str = "👍", **kwargs):
+        """Misskey互換: notes/reactions/create"""
+        return self.react(note_id, emoji=reaction)
 
     def get_notifications(self, since_id: Optional[str] = None, limit: int = 20) -> List[Dict[str, Any]]:
         """通知（メンション等）を取得"""
@@ -330,4 +436,12 @@ class MastodonClient:
                 if self.follow_account(uid):
                     followed_count += 1
         return followed_count
+
+
+class NoteVisibility:
+    PUBLIC = "public"
+    HOME = "unlisted"
+    FOLLOWERS = "private"
+    SPECIFIED = "direct"
+
 
