@@ -367,7 +367,7 @@ seikaku = """
     sudo rm -rf /を実行すると掃除が終わると思っています。
     実行したことはありません。
     実行したと言いますが覚えていません。
-    ロックスには、気温、湿度、気圧を測れる機能、キチガイゲージ機能、ログインボーナス機能に加え、めちゃくちゃででたらめな曲を作る機能（+S）があります。画像生成機能はありません。
+    ロックスには、気温、湿度、気圧を測れる機能、キチガイゲージ機能、ログインボーナス機能に加え、めちゃくちゃででたらめな曲を作る機能（+S）があります。画像生成機能はありません。毎朝6:00にはみんなを叩き起こす狂気の目覚ましソングを自動投稿します。
     きゅびーさんには、CPUとRAMの使用率を測れる機能と、通貨変換機能や、FX機能があります
     おぱじふぉぷろさんには、回線速度を測れる機能があります。
     おぱじゼロサンは、寝る機能と起きる機能と好感度システムがあります。
@@ -376,10 +376,65 @@ seikaku = """
     メンション(@)は本文に含めない
     """
 
+mezamashi = "06:00"
 ohiru = "12:00"
 oyatsu = "15:00"
 oyasumi = "22:00"
 oyasumi2 = "02:00"
+
+def job_alarm():
+    """朝6:00の狂気の目覚ましソング自動投稿"""
+    if not mc:
+        return
+    current_time = datetime.now().strftime("%Y年%m月%d日 %H:%M")
+    print(f"[{BOT_NAME}] Starting 6:00 AM morning alarm song generation...")
+    
+    mp3_path = None
+    midi_path = None
+    try:
+        from crazy_music_generator import generate_crazy_music
+        midi_path, mp3_path = generate_crazy_music()
+        
+        media_ids = []
+        if mp3_path and os.path.exists(mp3_path):
+            mp3_id = mc.upload_media(mp3_path, description="ロックス特製 狂気の目覚ましソング (MP3)")
+            if mp3_id:
+                media_ids.append(mp3_id)
+        if midi_path and os.path.exists(midi_path):
+            midi_id = mc.upload_media(midi_path, description="ロックス特製 狂気の目覚ましMIDI (MIDI)")
+            if midi_id:
+                media_ids.append(midi_id)
+
+        prompt = f"""
+        朝6:00の目覚ましソングの時間です！あなたはみんなを爆音で叩き起こすために、自身でめちゃくちゃででたらめな狂気の目覚ましソング（添付メディア）を作曲・演奏しました！
+        みんなに向けて、『朝だぞ起きろーー！！』と頭の悪いロックスらしく奇声を交えて叫びつつ、この目覚ましソングのめちゃくちゃなタイトルと、二度寝を絶対に許さない狂ったこだわりを元気いっぱいに叫んでください。
+        メンション(@)は本文に含めないでください。
+        """
+        response = client.models.generate_content(
+            model="gemini-3.5-flash-lite",
+            config=types.GenerateContentConfig(
+                system_instruction=seikaku + f"\n現在時刻は {current_time} です。",
+                safety_settings=SAFETY_SETTINGS,
+            ),
+            contents=types.Content(role="user", parts=[types.Part(text=prompt)])
+        )
+        raw_text = response.text or "お゛は゛よ゛う゛ご゛ざ゛い゛ま゛す゛！！朝6時だぞ起きろーーーーッ！！でたらめ目覚ましソング爆音演奏開始ーーッ！！"
+        safe_text = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", raw_text).strip()
+        
+        st = mc.post_status(safe_text, visibility="public", media_ids=media_ids if media_ids else None)
+        if st and "id" in st:
+            processed_store.add(str(st["id"]))
+        print(f"[{BOT_NAME}] Successfully posted 6:00 AM alarm song! (media: {media_ids})")
+    except Exception as ex:
+        print(f"Error in job_alarm: {ex}")
+    finally:
+        try:
+            if mp3_path and os.path.exists(mp3_path):
+                os.remove(mp3_path)
+            if midi_path and os.path.exists(midi_path):
+                os.remove(midi_path)
+        except Exception:
+            pass
 
 def jobX(current_time):
     if not mc:
@@ -419,6 +474,7 @@ def job():
     current_time = datetime.now().strftime("%Y年%m月%d日 %H:%M")
     jobX(current_time)
 
+schedule.every().day.at(mezamashi).do(job_alarm)
 schedule.every().day.at(ohiru).do(job)
 schedule.every().day.at(oyatsu).do(job)
 schedule.every().day.at(oyasumi).do(job)
