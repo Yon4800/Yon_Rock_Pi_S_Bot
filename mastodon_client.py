@@ -254,6 +254,53 @@ class MastodonClient:
                 
         return False
 
+    @staticmethod
+    def extract_media_parts(status: Dict[str, Any], max_images: int = 3) -> List[Any]:
+        """
+        ステータスに添付された画像（PNG, JPG, WEBP等）を取得し、Gemini用のPartオブジェクトリストを生成する
+        """
+        image_parts = []
+        if not status:
+            return image_parts
+            
+        media_list = status.get("media_attachments", [])
+        if not media_list and "files" in status:
+            media_list = status.get("files", [])
+            
+        for item in media_list[:max_images]:
+            m_type = item.get("type", "")
+            url = item.get("url") or item.get("preview_url")
+            if not url:
+                continue
+            
+            lower_url = url.lower()
+            is_img = (m_type in ["image", "image/png", "image/jpeg", "image/webp", "image/gif"]) or \
+                     any(lower_url.endswith(ext) or (ext + "?") in lower_url for ext in [".png", ".jpg", ".jpeg", ".webp"])
+            if not is_img:
+                continue
+                
+            try:
+                res = requests.get(url, timeout=12)
+                if res.status_code == 200 and res.content:
+                    c_type = res.headers.get("content-type", "").split(";")[0].strip()
+                    if not c_type or not c_type.startswith("image/"):
+                        if ".png" in lower_url:
+                            c_type = "image/png"
+                        elif ".webp" in lower_url:
+                            c_type = "image/webp"
+                        else:
+                            c_type = "image/jpeg"
+                    
+                    try:
+                        from google.genai import types
+                        image_parts.append(types.Part.from_bytes(data=res.content, mime_type=c_type))
+                    except Exception as ge:
+                        print(f"[MastodonClient] Error creating Part from bytes: {ge}")
+            except Exception as e:
+                print(f"[MastodonClient] Error downloading media from {url}: {e}")
+                
+        return image_parts
+
     # --- Misskey 互換レイヤー ---
     def notes_show(self, note_id: str) -> Dict[str, Any]:
         """Misskey互換: notes/show"""

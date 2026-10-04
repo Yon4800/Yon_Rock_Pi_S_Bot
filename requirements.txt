@@ -5,3 +5,4 @@ requests
 adafruit-circuitpython-ahtx0
 adafruit-circuitpython-bmp280
 Adafruit-Blinka
+lameenc

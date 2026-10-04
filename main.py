@@ -367,8 +367,7 @@ seikaku = """
     sudo rm -rf /を実行すると掃除が終わると思っています。
     実行したことはありません。
     実行したと言いますが覚えていません。
-    誰かが止めてくれるので大丈夫だと思っています。
-    ロックスには、気温、湿度、気圧を測れる機能があります。
+    ロックスには、気温、湿度、気圧を測れる機能、キチガイゲージ機能、ログインボーナス機能に加え、めちゃくちゃででたらめな曲を作る機能（+S）があります。画像生成機能はありません。
     きゅびーさんには、CPUとRAMの使用率を測れる機能と、通貨変換機能や、FX機能があります
     おぱじふぉぷろさんには、回線速度を測れる機能があります。
     おぱじゼロサンは、寝る機能と起きる機能と好感度システムがあります。
@@ -452,6 +451,11 @@ def get_conversation_history_from_context(status_id: str, max_depth: int = 10) -
 async def on_status(status, is_notification: bool = False):
     status_id = str(status.get("id"))
     if not status_id or processed_store.is_processed(status_id):
+        return
+
+    # リノート（ブースト/Reblog）は+TALKやコマンドのトリガーにしない（二重起動防止）
+    if status.get("reblog") is not None:
+        processed_store.add(status_id)
         return
 
     account = status.get("account", {})
@@ -557,17 +561,18 @@ async def on_status(status, is_notification: bool = False):
             print(f"Error in {BOT_NAME} +TALK: {e}")
         return
 
-    # 2. メンション処理 (+LLM, +M, +INFO, +LOGBO, +BONUS)
+    # 2. メンション処理 (+LLM, +M, +INFO, +LOGBO, +BONUS, +S)
     is_for_me = is_notification or mc.is_mentioned(status, my_id=MY_ID, my_username=MY_USERNAME, note_text=note_text)
     if not is_for_me:
         return
 
+    is_song = ("+S" in note_text.upper()) or ("+SONG" in note_text.upper()) or ("+MUSIC" in note_text.upper()) or ("作曲" in note_text) or ("曲作って" in note_text)
     is_llm = "+LLM" in note_text.upper()
     is_m = "+M" in note_text.upper()
     is_info = "+INFO" in note_text.upper()
     is_explicit_bonus_req = ("+LOGBO" in note_text.upper()) or ("+BONUS" in note_text.upper()) or ("ログインボーナス" in note_text)
 
-    if not (is_llm or is_m or is_info or is_explicit_bonus_req):
+    if not (is_song or is_llm or is_m or is_info or is_explicit_bonus_req):
         return
 
     processed_store.add(status_id)
@@ -608,6 +613,60 @@ async def on_status(status, is_notification: bool = False):
             mc.post_status(full_text, in_reply_to_id=status_id, visibility=vis)
         except Exception as ex:
             print(f"Error replying status: {ex}")
+
+    if is_song:
+        mc.react(status_id, emoji="🎶")
+        try:
+            from crazy_music_generator import generate_crazy_music
+            midi_path, mp3_path = generate_crazy_music()
+            
+            media_ids = []
+            if os.path.exists(mp3_path):
+                mp3_id = mc.upload_media(mp3_path)
+                if mp3_id:
+                    media_ids.append(mp3_id)
+            if os.path.exists(midi_path):
+                midi_id = mc.upload_media(midi_path)
+                if midi_id:
+                    media_ids.append(midi_id)
+                    
+            try:
+                if os.path.exists(mp3_path):
+                    os.remove(mp3_path)
+                if os.path.exists(midi_path):
+                    os.remove(midi_path)
+            except Exception:
+                pass
+
+            user_name = account.get("display_name") or account.get("username") or "ゲスト"
+            current_time = datetime.now().strftime("%Y年%m月%d日 %H:%M")
+            prompt = f"""
+            あなたは今、自身でめちゃくちゃででたらめな狂気の曲を作曲し、MIDIとMP3（添付メディア）を生成しました！
+            ユーザー『{user_name}』に向けて、この曲のタイトル（絶対に意味不明で狂っている名前）と、でたらめな演奏のこだわりや自慢を、頭の悪いロックスらしく奇声を交えて叫んでください。
+            メンション(@)は本文に含めないでください。
+            """
+            response = client.models.generate_content(
+                model="gemini-3.5-flash-lite",
+                config=types.GenerateContentConfig(
+                    system_instruction=seikaku + f"\n現在時刻は {current_time} です。",
+                    safety_settings=SAFETY_SETTINGS,
+                ),
+                contents=types.Content(role="user", parts=[types.Part(text=prompt)])
+            )
+            raw_text = response.text or "うおおおおおお！！めちゃくちゃな曲ができたぞーー！！脳が溶けるぜーー！！"
+            safe_text = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", raw_text).strip()
+            
+            target_acct = account.get('acct') or account.get('username') or ''
+            if target_acct and not safe_text.startswith(f"@{target_acct}"):
+                full_text = f"@{target_acct} {safe_text}"
+            else:
+                full_text = safe_text
+            vis = status.get("visibility", "public")
+            mc.post_status(full_text, in_reply_to_id=status_id, visibility=vis, media_ids=media_ids if media_ids else None)
+        except Exception as e:
+            print(f"Error in +S crazy song generation: {e}")
+            reply_status("作曲しようとしたら脳みそから煙が出てsudo rm -rf /のメロディになっちゃった！！")
+        return
 
     if is_info:
         mc.react(status_id, emoji="ℹ️")
@@ -763,16 +822,23 @@ async def on_status(status, is_notification: bool = False):
             )
 
             history_msgs = get_conversation_history_from_context(status_id)
+            image_parts = MastodonClient.extract_media_parts(status)
             user_input = note_text.replace("+LLM", "").replace("+BONUS", "").replace("+LOGBO", "").strip()
             user_input = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", user_input).strip()
             if not user_input:
-                user_input = "ロックス、何か面白いこと言って！"
+                if image_parts:
+                    user_input = "この画像を見て何か面白いこと言って！"
+                else:
+                    user_input = "ロックス、何か面白いこと言って！"
 
             contents = []
             for msg in history_msgs:
                 role = "model" if msg["role"] == "assistant" else "user"
                 contents.append(types.Content(role=role, parts=[types.Part(text=msg["content"])]))
-            contents.append(types.Content(role="user", parts=[types.Part(text=user_input)]))
+            user_parts = [types.Part(text=user_input)]
+            if image_parts:
+                user_parts.extend(image_parts)
+            contents.append(types.Content(role="user", parts=user_parts))
 
             response = client.models.generate_content(
                 model="gemini-3.5-flash-lite",
@@ -858,11 +924,17 @@ async def polling_runner():
             notifications = mc.get_notifications(limit=10)
             for notif in reversed(notifications):
                 notif_type = notif.get("type")
+                if notif_type in ["reblog", "favourite"]:
+                    continue
                 if notif_type == "mention":
                     status = notif.get("status")
                     if status:
                         sid = str(status.get("id"))
                         if not sid or processed_store.is_processed(sid):
+                            continue
+                        # リノートは処理しない
+                        if status.get("reblog") is not None:
+                            processed_store.add(sid)
                             continue
                         if not is_recent_status(status, max_age_seconds=300):
                             processed_store.add(sid)
@@ -887,6 +959,11 @@ async def polling_runner():
                 if not sid or sid in seen_ids or processed_store.is_processed(sid):
                     continue
                 seen_ids.add(sid)
+
+                # リノート（ブースト）は処理しない（二重起動防止）
+                if st.get("reblog") is not None:
+                    processed_store.add(sid)
+                    continue
 
                 if not is_recent_status(st, max_age_seconds=300):
                     processed_store.add(sid)
