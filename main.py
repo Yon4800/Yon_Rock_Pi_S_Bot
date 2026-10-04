@@ -622,13 +622,15 @@ async def on_status(status, is_notification: bool = False):
             
             media_ids = []
             if os.path.exists(mp3_path):
-                mp3_id = mc.upload_media(mp3_path)
+                mp3_id = mc.upload_media(mp3_path, description="ロックス特製 でたらめ狂気ソング (MP3)")
                 if mp3_id:
                     media_ids.append(mp3_id)
             if os.path.exists(midi_path):
-                midi_id = mc.upload_media(midi_path)
+                midi_id = mc.upload_media(midi_path, description="ロックス特製 でたらめ狂気MIDI (MIDI)")
                 if midi_id:
                     media_ids.append(midi_id)
+                    
+            print(f"[Yon_Rock_Pi_S_Bot] Crazy song media_ids: {media_ids}")
                     
             try:
                 if os.path.exists(mp3_path):
@@ -662,7 +664,8 @@ async def on_status(status, is_notification: bool = False):
             else:
                 full_text = safe_text
             vis = status.get("visibility", "public")
-            mc.post_status(full_text, in_reply_to_id=status_id, visibility=vis, media_ids=media_ids if media_ids else None)
+            post_res = mc.post_status(full_text, in_reply_to_id=status_id, visibility=vis, media_ids=media_ids if media_ids else None)
+            print(f"[Yon_Rock_Pi_S_Bot] Successfully posted crazy song reply (id: {post_res.get('id') if isinstance(post_res, dict) else post_res}, media: {media_ids})")
         except Exception as e:
             print(f"Error in +S crazy song generation: {e}")
             reply_status("作曲しようとしたら脳みそから煙が出てsudo rm -rf /のメロディになっちゃった！！")

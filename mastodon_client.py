@@ -121,28 +121,134 @@ class MastodonClient:
         if media_ids:
             payload["media_ids"] = [str(mid) for mid in media_ids]
         
-        res = self.session.post(url, json=payload, timeout=15)
-        res.raise_for_status()
-        return res.json()
-
-    def upload_media(self, file_path: str) -> Optional[str]:
-        """メディアファイルをアップロードして media_id を取得"""
-        url = f"{self.base_url}/api/v2/media"
         try:
+            res = self.session.post(url, json=payload, timeout=20)
+            res.raise_for_status()
+            return res.json()
+        except requests.exceptions.HTTPError as he:
+            # もしJSON送信でmedia_idsが400/422になった場合、フォームデータ形式で再試行
+            if media_ids and he.response is not None and he.response.status_code in (400, 422):
+                print(f"[MastodonClient] post_status JSON returned {he.response.status_code}, retrying with form-data...")
+                form_list = [("status", text), ("visibility", visibility)]
+                if in_reply_to_id:
+                    form_list.append(("in_reply_to_id", str(in_reply_to_id)))
+                for mid in media_ids:
+                    form_list.append(("media_ids[]", str(mid)))
+                try:
+                    res_form = self.session.post(url, data=form_list, timeout=20)
+                    res_form.raise_for_status()
+                    return res_form.json()
+                except requests.exceptions.HTTPError as he2:
+                    # 複数添付（音声+音声など）でサーバーのバリデーションに弾かれた場合、先頭1件のみで再試行
+                    if len(media_ids) > 1:
+                        print(f"[MastodonClient] post_status with multiple media failed ({he2.response.status_code if he2.response else 'err'}), retrying with first media only...")
+                        return self.post_status(text, in_reply_to_id=in_reply_to_id, visibility=visibility, media_ids=[media_ids[0]])
+                    raise
+            raise
+
+    def upload_media(self, file_path: str, description: Optional[str] = None) -> Optional[str]:
+        """メディアファイルをアップロードして media_id を取得"""
+        import mimetypes
+        
+        if not file_path or not os.path.exists(file_path):
+            print(f"[MastodonClient] upload_media: file not found: {file_path}")
+            return None
+
+        filename = os.path.basename(file_path)
+        lower = filename.lower()
+        if lower.endswith(".mp3"):
+            mime_type = "audio/mpeg"
+        elif lower.endswith((".mid", ".midi")):
+            mime_type = "audio/midi"
+        elif lower.endswith(".wav"):
+            mime_type = "audio/wav"
+        elif lower.endswith(".ogg"):
+            mime_type = "audio/ogg"
+        elif lower.endswith(".m4a"):
+            mime_type = "audio/mp4"
+        elif lower.endswith(".png"):
+            mime_type = "image/png"
+        elif lower.endswith((".jpg", ".jpeg")):
+            mime_type = "image/jpeg"
+        elif lower.endswith(".gif"):
+            mime_type = "image/gif"
+        elif lower.endswith(".webp"):
+            mime_type = "image/webp"
+        else:
+            mime_type, _ = mimetypes.guess_type(file_path)
+            if not mime_type:
+                mime_type = "application/octet-stream"
+
+        # 1. /api/v1/media を最優先で試行 (Hollo, Mastodon, Pleroma 等で最も広く互換性あり)
+        try:
+            url_v1 = f"{self.base_url}/api/v1/media"
             with open(file_path, "rb") as f:
-                res = self.session.post(url, files={"file": f}, timeout=30)
+                files = {"file": (filename, f, mime_type)}
+                data = {"description": description} if description else {}
+                res = self.session.post(url_v1, files=files, data=data, timeout=35)
                 if res.status_code in (200, 201, 202):
-                    return str(res.json().get("id"))
+                    mid = res.json().get("id")
+                    if mid:
+                        print(f"[MastodonClient] Successfully uploaded {filename} via /api/v1/media -> media_id: {mid}")
+                        if res.status_code == 202:
+                            for _ in range(10):
+                                time.sleep(1)
+                                try:
+                                    chk = self.session.get(f"{self.base_url}/api/v1/media/{mid}", timeout=10)
+                                    if chk.status_code == 200:
+                                        break
+                                except Exception:
+                                    pass
+                        return str(mid)
+                else:
+                    print(f"[MastodonClient] /api/v1/media returned {res.status_code}: {res.text[:200]}")
         except Exception as e:
-            # v1 フォールバック
-            try:
-                url_v1 = f"{self.base_url}/api/v1/media"
-                with open(file_path, "rb") as f:
-                    res = self.session.post(url_v1, files={"file": f}, timeout=30)
-                    if res.status_code in (200, 201, 202):
-                        return str(res.json().get("id"))
-            except Exception as ex:
-                print(f"[MastodonClient] Error uploading media: {ex}")
+            print(f"[MastodonClient] Error uploading to /api/v1/media: {e}")
+
+        # 2. /api/v2/media を試行 (Mastodon v2)
+        try:
+            url_v2 = f"{self.base_url}/api/v2/media"
+            with open(file_path, "rb") as f:
+                files = {"file": (filename, f, mime_type)}
+                data = {"description": description} if description else {}
+                res = self.session.post(url_v2, files=files, data=data, timeout=35)
+                if res.status_code in (200, 201, 202):
+                    mid = res.json().get("id")
+                    if mid:
+                        print(f"[MastodonClient] Successfully uploaded {filename} via /api/v2/media -> media_id: {mid}")
+                        if res.status_code == 202:
+                            for _ in range(10):
+                                time.sleep(1)
+                                try:
+                                    chk = self.session.get(f"{self.base_url}/api/v1/media/{mid}", timeout=10)
+                                    if chk.status_code == 200:
+                                        break
+                                except Exception:
+                                    pass
+                        return str(mid)
+                else:
+                    print(f"[MastodonClient] /api/v2/media returned {res.status_code}: {res.text[:200]}")
+        except Exception as e:
+            print(f"[MastodonClient] Error uploading to /api/v2/media: {e}")
+
+        # 3. Misskey形式 /api/drive/files/create を試行
+        try:
+            url_mk = f"{self.base_url}/api/drive/files/create"
+            with open(file_path, "rb") as f:
+                files = {"file": (filename, f, mime_type)}
+                data = {"i": self.token}
+                if description:
+                    data["comment"] = description
+                res = self.session.post(url_mk, files=files, data=data, timeout=35)
+                if res.status_code in (200, 201):
+                    mid = res.json().get("id")
+                    if mid:
+                        print(f"[MastodonClient] Successfully uploaded {filename} via Misskey drive -> media_id: {mid}")
+                        return str(mid)
+        except Exception as e:
+            pass
+
+        print(f"[MastodonClient] All upload methods failed for {filename}")
         return None
 
     def favourite(self, status_id: str) -> bool:
