@@ -112,7 +112,7 @@ def _build_midi_file(events: list, bpm: int = 180, ticks_per_beat: int = 480) ->
 def _biquad_bp_coeffs(freq: float, bw: float, sr: int):
     """Compute biquad bandpass filter coefficients (normalized)."""
     w0 = 2.0 * math.pi * min(freq, sr * 0.45) / sr
-    q = max(1.0, freq / max(20.0, bw))
+    q = max(1.0, freq / max(30.0, bw * 1.5))
     alpha = math.sin(w0) / (2.0 * q)
     cos_w0 = math.cos(w0)
     a0 = 1.0 + alpha
@@ -124,16 +124,16 @@ def _biquad_bp_coeffs(freq: float, bw: float, sr: int):
 
 
 def _synthesize_vocal_syllable(
-    audio_buffer: list,
+    vocal_buffer: list,
     sr: int,
     start_sec: float,
     dur_sec: float,
     pitch: int,
     kana: str,
-    gain: float = 0.48,
+    gain: float = 1.0,
 ):
-    """Synthesize a single Japanese singing syllable using formant biquad resonators."""
-    total_samples = len(audio_buffer)
+    """Synthesize a single Japanese singing syllable using formant biquad resonators + glottal tone."""
+    total_samples = len(vocal_buffer)
     s_idx = int(start_sec * sr)
     e_idx = min(total_samples, int((start_sec + dur_sec) * sr))
     if e_idx <= s_idx:
@@ -153,47 +153,40 @@ def _synthesize_vocal_syllable(
     f_coeffs = [_biquad_bp_coeffs(f, bw, sr) + (amp,) for (f, bw, amp) in formants]
 
     base_freq = _midi_to_freq(pitch)
-    # Slight pitch scoop at start + crazy vibrato
-    vib_rate = random.uniform(5.0, 7.5)
-    vib_depth = random.uniform(0.012, 0.028)
+    vib_rate = random.uniform(5.2, 7.2)
+    vib_depth = random.uniform(0.015, 0.030)
     scoop_offset = random.choice([-0.08, -0.04, 0.0, 0.05])
 
-    # Consonant burst duration
-    cons_dur = 0.032 if cons in ('s', 'h', 't', 'k', 'p', 'z') else (0.018 if cons else 0.0)
+    cons_dur = 0.030 if cons in ('s', 'h', 't', 'k', 'p', 'z') else (0.016 if cons else 0.0)
     cons_samples = int(cons_dur * sr)
 
-    # Filter state for 3 parallel formants: (x1, x2, y1, y2)
     f_state = [[0.0, 0.0, 0.0, 0.0] for _ in range(3)]
     phase = 0.0
     n_samples = e_idx - s_idx
 
     for idx in range(n_samples):
         local_t = idx / sr
-        progress = idx / max(1, n_samples)
 
-        # Envelope
-        attack = min(1.0, local_t / 0.015)
-        release = min(1.0, (dur_sec - local_t) / 0.025)
+        attack = min(1.0, local_t / 0.012)
+        release = min(1.0, (dur_sec - local_t) / 0.020)
         env = max(0.0, min(attack, release))
 
-        # Pitch with scoop & vibrato
         scoop = scoop_offset * math.exp(-local_t * 28.0)
-        vib = vib_depth * math.sin(2.0 * math.pi * vib_rate * local_t) if local_t > 0.06 else 0.0
+        vib = vib_depth * math.sin(2.0 * math.pi * vib_rate * local_t) if local_t > 0.05 else 0.0
         cur_freq = base_freq * (1.0 + scoop + vib)
         phase = (phase + cur_freq / sr) % 1.0
 
-        # Glottal-like pulse + sawtooth excitation
-        exc = (2.0 * phase - 1.0) * 0.65 + (0.5 if phase < 0.18 else -0.15)
+        # Rich glottal pulse + sawtooth excitation
+        exc = (2.0 * phase - 1.0) * 0.70 + (0.65 if phase < 0.22 else -0.18)
 
-        # Consonant noise/burst
         if idx < cons_samples:
             noise = random.uniform(-1.0, 1.0)
             if cons in ('s', 'z', 'h'):
-                exc = exc * 0.35 + noise * 0.75
+                exc = exc * 0.4 + noise * 0.7
             else:
-                exc = exc * 0.55 + noise * 0.55
+                exc = exc * 0.6 + noise * 0.5
 
-        out = 0.0
+        formant_out = 0.0
         for fi, (b0, b2, a1, a2, amp) in enumerate(f_coeffs):
             x1, x2, y1, y2 = f_state[fi]
             y0 = b0 * exc + b2 * x2 - a1 * y1 - a2 * y2
@@ -201,9 +194,11 @@ def _synthesize_vocal_syllable(
             f_state[fi][1] = x1
             f_state[fi][2] = y0
             f_state[fi][3] = y1
-            out += y0 * amp
+            formant_out += y0 * amp
 
-        audio_buffer[s_idx + idx] += out * env * gain
+        # Blend formant resonance with direct fundamental+2nd harmonic so pitch & voice are always loud and clear
+        direct_tone = 0.22 * math.sin(2.0 * math.pi * phase) + 0.10 * math.sin(4.0 * math.pi * phase)
+        vocal_buffer[s_idx + idx] += (formant_out * 1.8 + direct_tone) * env * gain
 
 
 def _add_fm_bell(audio_buffer: list, sr: int, start_sec: float, dur_sec: float, freq: float, gain: float = 0.18):
@@ -459,27 +454,37 @@ def generate_crazy_music(
         step_idx += 1
 
     # 7. Vocal Synth (Pattern A: Formant Singing, Channel 5)
+    vocal_buffer = [0.0] * total_samples if vocal_notes else None
     if vocal_notes:
-        vt = 0.25
+        vt = 0.20
         for note_item in vocal_notes:
-            if vt >= duration - 0.15:
+            if vt >= duration - 0.12:
                 break
-            kana = str(note_item.get("kana", "あ"))
+            kana = str(note_item.get("kana", "あ")).strip()
+            if not kana or kana in (" ", "　", "、", "。", "！", "？"):
+                vt += min(0.12, duration - vt)
+                continue
             pitch = int(note_item.get("pitch", 64))
             pitch = max(48, min(84, pitch))
-            beats = max(0.2, min(2.0, float(note_item.get("beats", 0.5))))
-            note_sec = min(beats * beat_step, duration - vt)
+            beats = max(0.3, min(2.0, float(note_item.get("beats", 0.5))))
+            note_sec = min(max(0.18, beats * beat_step), duration - vt)
 
             st_tk = int(vt / seconds_per_tick)
             en_tk = int((vt + note_sec * 0.9) / seconds_per_tick)
-            midi_events.append((st_tk, 'on', 5, pitch, 115))
+            midi_events.append((st_tk, 'on', 5, pitch, 120))
             midi_events.append((en_tk, 'off', 5, pitch, 0))
 
-            _synthesize_vocal_syllable(audio_buffer, sr, vt, note_sec * 0.95, pitch, kana, gain=0.52)
+            _synthesize_vocal_syllable(vocal_buffer, sr, vt, note_sec * 0.95, pitch, kana, gain=1.0)
             vt += note_sec
 
-    # Apply feedback delay + soft clipping for rich mix
+    # Apply feedback delay to BGM, then duck BGM and mix normalized vocal on top
     _apply_delay_and_soft_clip(audio_buffer, sr, delay_sec=0.16, feedback=0.22)
+    if vocal_buffer:
+        v_peak = max((abs(x) for x in vocal_buffer), default=0.0)
+        v_scale = (0.88 / v_peak) if v_peak > 1e-6 else 1.0
+        for i in range(total_samples):
+            mixed = audio_buffer[i] * 0.42 + vocal_buffer[i] * v_scale
+            audio_buffer[i] = math.tanh(mixed * 1.1)
 
     # 8. Write MIDI
     midi_bytes = _build_midi_file(midi_events, bpm=bpm, ticks_per_beat=ticks_per_beat)
