@@ -11,7 +11,6 @@ import re
 import requests
 
 from mastodon_client import MastodonClient, ProcessedStore
-from sensor_reader import read_sensors
 
 load_dotenv()
 Token = os.getenv("TOKEN")
@@ -114,29 +113,6 @@ def get_designated_bot_for_talk(status, note_text: str):
     return CHOREI_ORDER[0]
 
 processed_store = ProcessedStore(os.path.join(os.path.dirname(__file__), "processed_status_ids.json"))
-
-# センサー測定履歴の永続保存
-def save_sensor_record(sensor_data):
-    try:
-        history_file = os.path.join(os.path.dirname(__file__), "sensor_history.json")
-        history = []
-        if os.path.exists(history_file):
-            with open(history_file, "r", encoding="utf-8") as f:
-                history = json.load(f)
-                if not isinstance(history, list):
-                    history = []
-        history.append({
-            "timestamp": datetime.now().isoformat(),
-            "temperature": sensor_data.get("temperature"),
-            "humidity": sensor_data.get("humidity"),
-            "pressure": sensor_data.get("pressure"),
-            "error": sensor_data.get("error")
-        })
-        history = history[-500:]
-        with open(history_file, "w", encoding="utf-8") as f:
-            json.dump(history, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        print(f"Error saving sensor history: {e}")
 
 MY_ID = ""
 MY_USERNAME = ""
@@ -333,7 +309,7 @@ seikaku = """
     sudo rm -rf /を実行すると掃除が終わると思っています。
     実行したことはありません。
     実行したと言いますが覚えていません。
-    ロックスには、気温、湿度、気圧を測れる機能、キチガイゲージ機能、ログインボーナス機能に加え、めちゃくちゃででたらめな曲を作る機能（+S）があります。画像生成機能はありません。毎朝6:00にはみんなを叩き起こす狂気の目覚ましソングを自動投稿します。
+    ロックスには、キチガイゲージ機能、ログインボーナス機能に加え、めちゃくちゃででたらめな曲を作る機能（+S）やボーカル入りソングを歌う機能（+SV）があります。画像生成機能はありません。毎朝6:00にはみんなを叩き起こす狂気の目覚ましソングを自動投稿します。
     きゅびーさんには、CPUとRAMの使用率を測れる機能があります
     おぱじふぉぷろさんには、回線速度を測れる機能があります。
     おぱじゼロサンは、寝る機能と起きる機能と好感度システムがあります。
@@ -348,6 +324,86 @@ oyatsu = "15:00"
 oyasumi = "22:00"
 oyasumi2 = "02:00"
 
+def generate_ai_song_plan(with_vocal: bool = False, user_hint: str = "") -> dict:
+    """Ask Gemini (Rocks) to design a crazy multi-instrument composition and optional vocal lyrics/melody."""
+    fallback_lyrics = "おきておきてろっくすだよすーどぅーあーるえむえふだーっ"
+    fallback_notes = [
+        {"kana": ch, "pitch": random.choice([60, 63, 64, 67, 69, 72]), "beats": random.choice([0.35, 0.5, 0.7])}
+        for ch in fallback_lyrics
+    ]
+    fallback = {
+        "title": "カーネルパニック交響曲第404番",
+        "bpm": random.randint(165, 225),
+        "scale": random.choice(["diminished", "whole_tone", "chromatic_chaos", "hyper_penta", "minor_crazy"]),
+        "instruments": random.sample(["lead", "fm_bell", "pad", "pluck"], k=random.randint(3, 4)),
+        "lyrics_text": fallback_lyrics if with_vocal else "",
+        "vocal_notes": fallback_notes if with_vocal else [],
+    }
+    try:
+        vocal_instr = ""
+        if with_vocal:
+            vocal_instr = (
+                '\nさらにボーカル曲なので、ロックスが考えた狂った日本語の歌詞（ひらがなのみ16〜28文字）と、'
+                '1文字ごとの音程配列 "vocal_notes": [{"kana": "あ", "pitch": 64, "beats": 0.5}, ...] も出力してください。'
+                '\n"lyrics_text" にも歌詞全体を入れてください。pitchは55〜79の整数、beatsは0.25〜1.0にしてください。'
+            )
+        hint_line = f"\nユーザーのリクエスト/話題: {user_hint}" if user_hint else ""
+        prompt = (
+            "あなたは頭が悪くて狂ったSBC両生類『ロックス』です。今から作曲する曲の構成をJSONだけで出力してください。"
+            f"{hint_line}\n"
+            'JSON形式: {"title": "狂った曲名", "bpm": 185, "scale": "diminished", '
+            '"instruments": ["lead", "fm_bell", "pad", "pluck"]}'
+            '\nscaleは "diminished", "whole_tone", "chromatic_chaos", "hyper_penta", "minor_crazy" から1つ。'
+            '\ninstrumentsは "lead", "fm_bell", "pad", "pluck" から3〜4個選んで混ぜてください。'
+            f"{vocal_instr}\n"
+            "コードブロックや説明文は書かず、純粋なJSONのみ返してください。"
+        )
+        res = client.models.generate_content(
+            model="gemini-3.5-flash-lite",
+            config=types.GenerateContentConfig(
+                system_instruction=seikaku,
+                safety_settings=SAFETY_SETTINGS,
+            ),
+            contents=types.Content(role="user", parts=[types.Part(text=prompt)]),
+        )
+        raw = (res.text or "").strip()
+        m = re.search(r"\{.*\}", raw, re.DOTALL)
+        if not m:
+            return fallback
+        parsed = json.loads(m.group(0))
+        if not isinstance(parsed, dict):
+            return fallback
+        plan = dict(fallback)
+        if parsed.get("title"):
+            plan["title"] = str(parsed["title"])[:60]
+        if isinstance(parsed.get("bpm"), (int, float)):
+            plan["bpm"] = max(110, min(260, int(parsed["bpm"])))
+        if parsed.get("scale") in ["diminished", "whole_tone", "chromatic_chaos", "hyper_penta", "minor_crazy"]:
+            plan["scale"] = parsed["scale"]
+        if isinstance(parsed.get("instruments"), list) and parsed["instruments"]:
+            valid_inst = [x for x in parsed["instruments"] if x in ("lead", "fm_bell", "pad", "pluck")]
+            if valid_inst:
+                plan["instruments"] = valid_inst
+        if with_vocal:
+            v_notes = parsed.get("vocal_notes")
+            if isinstance(v_notes, list) and len(v_notes) >= 4:
+                cleaned_notes = []
+                for item in v_notes[:32]:
+                    if isinstance(item, dict) and item.get("kana"):
+                        cleaned_notes.append({
+                            "kana": str(item["kana"])[:2],
+                            "pitch": int(item.get("pitch", 64)),
+                            "beats": float(item.get("beats", 0.5)),
+                        })
+                if cleaned_notes:
+                    plan["vocal_notes"] = cleaned_notes
+                    plan["lyrics_text"] = str(parsed.get("lyrics_text") or "".join(n["kana"] for n in cleaned_notes))
+        return plan
+    except Exception as e:
+        print(f"[generate_ai_song_plan] fallback due to: {e}")
+        return fallback
+
+
 def job_alarm():
     """朝6:00の狂気の目覚ましソング自動投稿"""
     if not mc:
@@ -359,7 +415,8 @@ def job_alarm():
     midi_path = None
     try:
         from crazy_music_generator import generate_crazy_music
-        midi_path, mp3_path = generate_crazy_music()
+        plan = generate_ai_song_plan(with_vocal=False, user_hint="朝6時の狂気の目覚ましソング")
+        midi_path, mp3_path = generate_crazy_music(composition=plan)
         
         media_ids = []
         if mp3_path and os.path.exists(mp3_path):
@@ -565,18 +622,18 @@ async def on_status(status, is_notification: bool = False):
             print(f"Error in {BOT_NAME} +TALK: {e}")
         return
 
-    # 2. メンション処理 (+LLM, +M, +INFO, +LOGBO, +BONUS, +S)
+    # 2. メンション処理 (+LLM, +INFO, +LOGBO, +BONUS, +S, +SV)
     is_for_me = is_notification or mc.is_mentioned(status, my_id=MY_ID, my_username=MY_USERNAME, note_text=note_text)
     if not is_for_me:
         return
 
-    is_song = ("+S" in note_text.upper()) or ("+SONG" in note_text.upper()) or ("+MUSIC" in note_text.upper()) or ("作曲" in note_text) or ("曲作って" in note_text)
+    is_vocal_song = "+SV" in note_text.upper()
+    is_song = is_vocal_song or ("+S" in note_text.upper()) or ("+SONG" in note_text.upper()) or ("+MUSIC" in note_text.upper()) or ("作曲" in note_text) or ("曲作って" in note_text)
     is_llm = "+LLM" in note_text.upper()
-    is_m = "+M" in note_text.upper()
     is_info = "+INFO" in note_text.upper()
     is_explicit_bonus_req = ("+LOGBO" in note_text.upper()) or ("+BONUS" in note_text.upper()) or ("ログインボーナス" in note_text)
 
-    if not (is_song or is_llm or is_m or is_info or is_explicit_bonus_req):
+    if not (is_song or is_llm or is_info or is_explicit_bonus_req):
         return
 
     processed_store.add(status_id)
@@ -619,14 +676,21 @@ async def on_status(status, is_notification: bool = False):
             print(f"Error replying status: {ex}")
 
     if is_song:
-        mc.react(status_id, emoji="🎶")
+        mc.react(status_id, emoji="🎤" if is_vocal_song else "🎶")
         try:
             from crazy_music_generator import generate_crazy_music
-            midi_path, mp3_path = generate_crazy_music()
+            user_hint = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", note_text)
+            user_hint = re.sub(r"\+(?:SV|SONG|MUSIC|S)", "", user_hint, flags=re.IGNORECASE).strip()
+            plan = generate_ai_song_plan(with_vocal=is_vocal_song, user_hint=user_hint)
+            midi_path, mp3_path = generate_crazy_music(
+                composition=plan,
+                vocal_notes=plan.get("vocal_notes") if is_vocal_song else None,
+            )
             
             media_ids = []
             if os.path.exists(mp3_path):
-                mp3_id = mc.upload_media(mp3_path, description="ロックス特製 でたらめ狂気ソング (MP3)")
+                desc = "ロックス特製 ボーカル入り狂気ソング (MP3)" if is_vocal_song else "ロックス特製 でたらめ狂気ソング (MP3)"
+                mp3_id = mc.upload_media(mp3_path, description=desc)
                 if mp3_id:
                     media_ids.append(mp3_id)
             if os.path.exists(midi_path):
@@ -646,11 +710,23 @@ async def on_status(status, is_notification: bool = False):
 
             user_name = account.get("display_name") or account.get("username") or "ゲスト"
             current_time = datetime.now().strftime("%Y年%m月%d日 %H:%M")
-            prompt = f"""
-            あなたは今、自身でめちゃくちゃででたらめな狂気の曲を作曲し、MIDIとMP3（添付メディア）を生成しました！
-            ユーザー『{user_name}』に向けて、この曲のタイトル（絶対に意味不明で狂っている名前）と、でたらめな演奏のこだわりや自慢を、頭の悪いロックスらしく奇声を交えて叫んでください。
-            メンション(@)は本文に含めないでください。
-            """
+            inst_str = ", ".join(plan.get("instruments", []))
+            if is_vocal_song:
+                lyrics_str = plan.get("lyrics_text", "")
+                prompt = f"""
+                あなたは今、自身で複数の楽器（{inst_str}）を混ぜ混ぜにして、さらに自分の狂気のボーカル＆自作歌詞を入れた新曲（添付メディア）を作曲・歌唱しました！
+                曲名: 『{plan.get("title")}』 (BPM: {plan.get("bpm")})
+                あなたの自作歌詞: 『{lyrics_str}』
+                ユーザー『{user_name}』に向けて、この曲のタイトルと自作歌詞を紹介しつつ、天才歌手ロックスとしての自慢や奇声を元気いっぱいに叫んでください。
+                メンション(@)は本文に含めないでください。
+                """
+            else:
+                prompt = f"""
+                あなたは今、複数の楽器（{inst_str}）を混ぜ混ぜにしてめちゃくちゃででたらめな狂気の曲（添付メディア）を作曲し、MIDIとMP3を生成しました！
+                曲名: 『{plan.get("title")}』 (BPM: {plan.get("bpm")})
+                ユーザー『{user_name}』に向けて、この曲のタイトルと、いろいろな楽器をごちゃ混ぜにしたでたらめな演奏のこだわりや自慢を、頭の悪いロックスらしく奇声を交えて叫んでください。
+                メンション(@)は本文に含めないでください。
+                """
             response = client.models.generate_content(
                 model="gemini-3.5-flash-lite",
                 config=types.GenerateContentConfig(
@@ -694,44 +770,6 @@ async def on_status(status, is_notification: bool = False):
         )
         reply_status(info_text)
         return
-
-    elif is_m:
-        mc.react(status_id, emoji="🌡️")
-        try:
-            sensor_data = read_sensors()
-            save_sensor_record(sensor_data)
-
-            temp = sensor_data.get("temperature")
-            hum = sensor_data.get("humidity")
-            press = sensor_data.get("pressure")
-            err = sensor_data.get("error")
-
-            current_time = datetime.now().strftime("%Y年%m月%d日 %H:%M")
-            prompt = f"""
-            環境センサーの測定結果：
-            - 気温: {temp} ℃
-            - 湿度: {hum} ％
-            - 気圧: {press} hPa
-            - エラー: {err}
-
-            ロックス（頭が悪く支離滅裂なSBC両生類）として、この数値を報告してください。
-            全く関係ない話や、数字を勘違いした話を織り交ぜて支離滅裂に語ってください。
-            """
-
-            response = client.models.generate_content(
-                model="gemini-3.5-flash-lite",
-                config=types.GenerateContentConfig(
-                    system_instruction=seikaku + f"\n現在時刻は {current_time} です。",
-                    safety_settings=SAFETY_SETTINGS,
-                ),
-                contents=types.Content(role="user", parts=[types.Part(text=prompt)])
-            )
-            raw_text = response.text or "（センサーの数値を読もうとして爆発したみたい...）"
-            safe_text = re.sub(r"@[\w\-\.]+(?:@[\w\-\.]+)?", "", raw_text).strip()
-            reply_status(safe_text)
-        except Exception as e:
-            print(f"Sensor error in RockPi: {e}")
-            reply_status("センサーを測ろうとしたら頭から煙が出てsudo rm -rf /しちゃった！！")
 
     elif is_llm or is_explicit_bonus_req:
         mc.react(status_id, emoji="🤯" if overheated else "🤔")
