@@ -325,17 +325,20 @@ oyasumi = "22:00"
 oyasumi2 = "02:00"
 
 def generate_ai_song_plan(with_vocal: bool = False, user_hint: str = "") -> dict:
-    """Ask Gemini (Rocks) to design a crazy multi-instrument composition and optional vocal lyrics/melody."""
+    """Ask Gemini (Rocks) to design a crazy multi-instrument + keyword SFX composition and optional vocal lyrics/melody."""
+    all_insts = ["supersaw", "distorted_guitar", "chiptune_8bit", "acid_bass", "wobble_dubstep"]
+    all_sfx = ["laser", "explosion", "siren", "cat_meow", "boing", "bubble", "thunder", "coin", "glitch", "alarm", "heartbeat"]
     fallback_lyrics = "おきておきてろっくすだよすーどぅーあーるえむえふだーっ"
     fallback_notes = [
-        {"kana": ch, "pitch": random.choice([60, 63, 64, 67, 69, 72]), "beats": random.choice([0.35, 0.5, 0.7])}
+        {"kana": ch, "pitch": random.choice([58, 60, 63, 64, 67, 69, 72, 75]), "beats": random.choice([0.35, 0.5, 0.7])}
         for ch in fallback_lyrics
     ]
     fallback = {
         "title": "カーネルパニック交響曲第404番",
-        "bpm": random.randint(165, 225),
+        "bpm": random.randint(155, 220),
         "scale": random.choice(["diminished", "whole_tone", "chromatic_chaos", "hyper_penta", "minor_crazy"]),
-        "instruments": random.sample(["lead", "fm_bell", "pad", "pluck"], k=random.randint(3, 4)),
+        "instruments": random.sample(all_insts, k=random.randint(3, 4)),
+        "sfx": random.sample(all_sfx, k=2) if user_hint else [random.choice(all_sfx)],
         "lyrics_text": fallback_lyrics if with_vocal else "",
         "vocal_notes": fallback_notes if with_vocal else [],
     }
@@ -343,18 +346,23 @@ def generate_ai_song_plan(with_vocal: bool = False, user_hint: str = "") -> dict
         vocal_instr = ""
         if with_vocal:
             vocal_instr = (
-                '\nさらにボーカル曲なので、ロックスが考えた狂った日本語の歌詞（ひらがなのみ16〜28文字）と、'
+                '\nさらにボーカル曲なので、ロックスが考えたキーワードに無理やり絡めた狂った日本語の歌詞（ひらがなのみ16〜28文字）と、'
                 '1文字ごとの音程配列 "vocal_notes": [{"kana": "あ", "pitch": 64, "beats": 0.5}, ...] も出力してください。'
-                '\n"lyrics_text" にも歌詞全体を入れてください。pitchは55〜79の整数、beatsは0.25〜1.0にしてください。'
+                '\n"lyrics_text" にも歌詞全体を入れてください。pitchは55〜80の整数（音程の上下を激しく楽しく）、beatsは0.3〜0.9にしてください。'
             )
-        hint_line = f"\nユーザーのリクエスト/話題: {user_hint}" if user_hint else ""
+        hint_line = (
+            f"\nユーザー指定キーワード: 『{user_hint}』"
+            f"\nこのキーワードの雰囲気や音のイメージを無理やり曲名・楽器・効果音(sfx)・歌詞に混ぜ込んでください！"
+            if user_hint else ""
+        )
         prompt = (
             "あなたは頭が悪くて狂ったSBC両生類『ロックス』です。今から作曲する曲の構成をJSONだけで出力してください。"
             f"{hint_line}\n"
             'JSON形式: {"title": "狂った曲名", "bpm": 185, "scale": "diminished", '
-            '"instruments": ["lead", "fm_bell", "pad", "pluck"]}'
+            '"instruments": ["supersaw", "distorted_guitar", "acid_bass"], "sfx": ["laser", "explosion"]}'
             '\nscaleは "diminished", "whole_tone", "chromatic_chaos", "hyper_penta", "minor_crazy" から1つ。'
-            '\ninstrumentsは "lead", "fm_bell", "pad", "pluck" から3〜4個選んで混ぜてください。'
+            '\ninstrumentsは "supersaw", "distorted_guitar", "chiptune_8bit", "acid_bass", "wobble_dubstep" から3〜4個選んで混ぜてください。'
+            '\nsfxは "laser", "explosion", "siren", "cat_meow", "boing", "bubble", "thunder", "coin", "glitch", "alarm", "heartbeat" からキーワードに合うもの（または無理やり連想したもの）を2〜3個選んでください。'
             f"{vocal_instr}\n"
             "コードブロックや説明文は書かず、純粋なJSONのみ返してください。"
         )
@@ -381,9 +389,13 @@ def generate_ai_song_plan(with_vocal: bool = False, user_hint: str = "") -> dict
         if parsed.get("scale") in ["diminished", "whole_tone", "chromatic_chaos", "hyper_penta", "minor_crazy"]:
             plan["scale"] = parsed["scale"]
         if isinstance(parsed.get("instruments"), list) and parsed["instruments"]:
-            valid_inst = [x for x in parsed["instruments"] if x in ("lead", "fm_bell", "pad", "pluck")]
+            valid_inst = [x for x in parsed["instruments"] if x in all_insts]
             if valid_inst:
                 plan["instruments"] = valid_inst
+        if isinstance(parsed.get("sfx"), list) and parsed["sfx"]:
+            valid_sfx = [x for x in parsed["sfx"] if x in all_sfx]
+            if valid_sfx:
+                plan["sfx"] = valid_sfx[:4]
         if with_vocal:
             v_notes = parsed.get("vocal_notes")
             if isinstance(v_notes, list) and len(v_notes) >= 4:
@@ -711,19 +723,21 @@ async def on_status(status, is_notification: bool = False):
             user_name = account.get("display_name") or account.get("username") or "ゲスト"
             current_time = datetime.now().strftime("%Y年%m月%d日 %H:%M")
             inst_str = ", ".join(plan.get("instruments", []))
+            sfx_str = ", ".join(plan.get("sfx", []))
+            kw_note = f"\n無理やり混ぜたキーワード: 『{user_hint}』 (効果音: {sfx_str})" if user_hint else f"\n混ぜた効果音: {sfx_str}"
             if is_vocal_song:
                 lyrics_str = plan.get("lyrics_text", "")
                 prompt = f"""
                 あなたは今、自身で複数の楽器（{inst_str}）を混ぜ混ぜにして、さらに自分の狂気のボーカル＆自作歌詞を入れた新曲（添付メディア）を作曲・歌唱しました！
-                曲名: 『{plan.get("title")}』 (BPM: {plan.get("bpm")})
+                曲名: 『{plan.get("title")}』 (BPM: {plan.get("bpm")}){kw_note}
                 あなたの自作歌詞: 『{lyrics_str}』
-                ユーザー『{user_name}』に向けて、この曲のタイトルと自作歌詞を紹介しつつ、天才歌手ロックスとしての自慢や奇声を元気いっぱいに叫んでください。
+                ユーザー『{user_name}』に向けて、この曲のタイトルと自作歌詞・無理やり混ぜた音を紹介しつつ、天才歌手ロックスとしての自慢や奇声を元気いっぱいに叫んでください。
                 メンション(@)は本文に含めないでください。
                 """
             else:
                 prompt = f"""
                 あなたは今、複数の楽器（{inst_str}）を混ぜ混ぜにしてめちゃくちゃででたらめな狂気の曲（添付メディア）を作曲し、MIDIとMP3を生成しました！
-                曲名: 『{plan.get("title")}』 (BPM: {plan.get("bpm")})
+                曲名: 『{plan.get("title")}』 (BPM: {plan.get("bpm")}){kw_note}
                 ユーザー『{user_name}』に向けて、この曲のタイトルと、いろいろな楽器をごちゃ混ぜにしたでたらめな演奏のこだわりや自慢を、頭の悪いロックスらしく奇声を交えて叫んでください。
                 メンション(@)は本文に含めないでください。
                 """
