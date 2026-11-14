@@ -14,7 +14,6 @@ from typing import Optional, Dict, Any, List
 
 from mastodon_client import MastodonClient, ProcessedStore
 from sensor_reader import read_sensors
-from shared_economy_helper import load_economy, save_economy, apply_rate_change, get_user_state
 
 load_dotenv()
 Token = os.getenv("TOKEN")
@@ -51,7 +50,7 @@ SAFETY_SETTINGS = [
 BOT_NAME = "Yon_Rock_Pi_S"
 
 BOT_SUMMARIES = {
-    "Cubie_A5E_San": "Radxa Cubie A5E (きゅびーさん): 小さくて省電力なシングルボードコンピュータ娘。24時間稼働の社畜で、給料（CBC）を欲しがっている。OrangePi 4 Proの生意気な性格が気に入らず、Rock Pi S of ロックスの頭の悪さに困っている。",
+    "Cubie_A5E_San": "Radxa Cubie A5E (きゅびーさん): 小さくて省電力なシングルボードコンピュータ娘。24時間稼働の社畜。OrangePi 4 Proの生意気な性格が気に入らず、Rock Pi S of ロックスの頭の悪さに困っている。",
     "OrangePi_4_Pro": "OrangePi 4 Pro (おぱじ・フォプロ): 少し大きくて気が強く、煽ったりマウントを取ったりするSBC御局娘。科学者ぶっており、Radxa Cubie A5Eをいつもバカにしている。社畜をエリートの誇りだと思っている。",
     "opizero3_llm": "OrangePi Zero 3 (オパジゼロサン): 元気いっぱいのSBC娘。親身でオタク話が好きで、よく眠る。Cubie A5Eと仲良くしたいが寄り添ってもらえない。妹のOrangePi 4 Proを調子に乗っていてイキリで鬱陶しいと思っている。",
     "Yon_Rock_Pi_S": "Radxa Rock Pi S (ロックス): 頭が悪く、的外れで嘘や狂ったことしか言わないSBC両生類。日本語が怪しく、sudo rm -rf / を魔法のコマンドだと思っている。"
@@ -150,22 +149,6 @@ def register_bot(bot_name, client_inst):
         my_info = client_inst.get_me()
         MY_ID = str(my_info["id"])
         MY_USERNAME = my_info["username"]
-        
-        econ_data = load_economy()
-        if "bots" not in econ_data:
-            econ_data["bots"] = {}
-            
-        if bot_name not in econ_data["bots"]:
-            econ_data["bots"][bot_name] = {
-                "balance_cbc": 0.0,
-                "last_salary_paid_time": (datetime.now() - timedelta(days=1)).isoformat(),
-                "break_until": None,
-                "virtual_pc_count": 0,
-                "items": []
-            }
-        econ_data["bots"][bot_name]["id"] = MY_ID
-        econ_data["bots"][bot_name]["username"] = MY_USERNAME
-        save_economy(econ_data)
         print(f"Registered bot {bot_name} successfully (ID: {MY_ID}, username: {MY_USERNAME})")
     except Exception as e:
         print(f"Error registering bot: {e}")
@@ -182,21 +165,6 @@ async def resolve_all_bots():
     }
     for b_name, uname in env_usernames.items():
         RESOLVED_BOTS[b_name] = {"id": "", "username": uname}
-
-    try:
-        econ_data = load_economy()
-        if "bots" in econ_data:
-            for b_name, b_info in econ_data["bots"].items():
-                if isinstance(b_info, dict):
-                    b_id = str(b_info.get("id", ""))
-                    b_uname = b_info.get("username", "")
-                    if b_id and not b_id.startswith("id_") and b_uname and not b_uname.endswith("_user"):
-                        RESOLVED_BOTS[b_name] = {
-                            "id": b_id,
-                            "username": b_uname
-                        }
-    except Exception as e:
-        print(f"Warning: Could not load bots from economy file: {e}")
 
     for b_name, uname in env_usernames.items():
         if RESOLVED_BOTS.get(b_name, {}).get("id"):
@@ -368,7 +336,7 @@ seikaku = """
     実行したことはありません。
     実行したと言いますが覚えていません。
     ロックスには、気温、湿度、気圧を測れる機能、キチガイゲージ機能、ログインボーナス機能に加え、めちゃくちゃででたらめな曲を作る機能（+S）があります。画像生成機能はありません。毎朝6:00にはみんなを叩き起こす狂気の目覚ましソングを自動投稿します。
-    きゅびーさんには、CPUとRAMの使用率を測れる機能と、通貨変換機能や、FX機能があります
+    きゅびーさんには、CPUとRAMの使用率を測れる機能があります
     おぱじふぉぷろさんには、回線速度を測れる機能があります。
     おぱじゼロサンは、寝る機能と起きる機能と好感度システムがあります。
     Fediverse(Mastodon/Hollo)のBotです。
@@ -439,20 +407,8 @@ def job_alarm():
 def jobX(current_time):
     if not mc:
         return
-    rate_info = ""
-    try:
-        econ_data = load_economy()
-        rate_cbc = econ_data["rates"]["CBC"]["current"]
-        rate_ogc = econ_data["rates"]["OGC"]["current"]
-        rate_info = (
-            f"\n【現在の為替レート情報】\n"
-            f"・1 $SBC = {rate_cbc:.2f} CBC\n"
-            f"・1 $SBC = {rate_ogc:.2f} OGC\n"
-        )
-    except Exception as e:
-        print(f"Error loading rates in jobX: {e}")
 
-    system_message = seikaku + rate_info + "\n現在時刻は" + current_time + "です。"
+    system_message = seikaku + "\n現在時刻は" + current_time + "です。"
     response = client.models.generate_content(
         model="gemini-3.5-flash-lite",
         config=types.GenerateContentConfig(
@@ -541,12 +497,6 @@ async def on_status(status, is_notification: bool = False):
                 current_step = 1
 
         processed_store.add(status_id)
-
-        try:
-            econ_data = load_economy()
-        except Exception as e:
-            print(f"Error loading economy in RockPi +TALK: {e}")
-            return
 
         # 会話履歴の取得（コンテキスト補助用）
         ctx = mc.get_context(status_id)
@@ -788,27 +738,6 @@ async def on_status(status, is_notification: bool = False):
     elif is_llm or is_explicit_bonus_req:
         mc.react(status_id, emoji="🤯" if overheated else "🤔")
         try:
-            econ_data = None
-            coin_info = ""
-            try:
-                econ_data = load_economy()
-                user_name_real = account.get("display_name") or account.get("username") or "ゲスト"
-                username_real = account.get("username", "")
-                user_state = get_user_state(econ_data, sender_id, username_real, user_name_real)
-                user_state["balance_cbc"] = round(user_state["balance_cbc"] + 50.0, 2)
-                save_economy(econ_data)
-                
-                rate_cbc = econ_data["rates"]["CBC"]["current"]
-                rate_ogc = econ_data["rates"]["OGC"]["current"]
-                coin_info = (
-                    f"\n【通貨および為替情報】\n"
-                    f"・1 $SBC = {rate_cbc:.2f} CBC\n"
-                    f"・1 $SBC = {rate_ogc:.2f} OGC\n"
-                    f"※ロックスに話しかけたことで、50.00 CBC（Cubie Coin）が報酬として付与されました。\n"
-                )
-            except Exception as ex:
-                print(f"Error in RockPi economy update: {ex}")
-
             # ログインボーナス判定
             bonus_data = load_bonus()
             if "users" not in bonus_data:
@@ -863,21 +792,12 @@ async def on_status(status, is_notification: bool = False):
             user_name = account.get("display_name") or account.get("username") or "ゲスト"
             current_time = datetime.now().strftime("%Y年%m月%d日 %H:%M")
 
-            rate_rules = (
-                "\n【会話による為替操作ルール】\n"
-                "・あなたは狂気度（キチガイゲージ）の状態に応じて、CBCまたはOGCの為替レートを動かすことができます。\n"
-                "  タグの形式: `[RATE_CHANGE: CBC +2.5]` または `[RATE_CHANGE: OGC -4.0]` を末尾に出力。変動幅 -5.0 から +5.0。\n"
-                "・特に動かさない場合はタグを出力しないでください。"
-            )
-
             system_message = (
                 seikaku + f"\n現在時刻は {current_time} です。"
-                + coin_info
                 + f"\n話しかけているユーザーの名前は『{user_name}』です。相手を絶対に「よんぱちさん」と呼んではいけません。"
                 + f"\nゲージ値（{new_gauge}%）はシステム内部の隠しステータスなので直接公表しないでください。"
                 + gauge_instruction
                 + bonus_instruction
-                + rate_rules
             )
 
             history_msgs = get_conversation_history_from_context(status_id)
@@ -908,18 +828,6 @@ async def on_status(status, is_notification: bool = False):
                 contents=contents
             )
             raw_text = response.text or "（ロックスの頭の中でセグメンテーション違反が発生しました）"
-
-            # 為替レートタグの処理
-            match = re.search(r"\[RATE_CHANGE:\s*(CBC|OGC)\s*([+-]?\d+(?:\.\d+)?)\]", raw_text)
-            if match:
-                try:
-                    target_coin = match.group(1).upper()
-                    delta = float(match.group(2))
-                    apply_rate_change(econ_data, target_coin, delta)
-                    save_economy(econ_data)
-                    raw_text = re.sub(r"\[RATE_CHANGE:\s*(?:CBC|OGC)\s*[+-]?\d+(?:\.\d+)?\]", "", raw_text).strip()
-                except Exception as e:
-                    print(f"Error applying rate change in RockPi: {e}")
 
             save_gauge(20 if overheated else new_gauge, now_str)
 
